@@ -1,15 +1,33 @@
-repositories {
-    flatDir {
-        dirs("libs")
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.ggr.kinetrak"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.ggr.kinetrak"
+        minSdk = 28
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
     }
 }
 
 dependencies {
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
-
-    // Qualcomm SNPE Java API
-    implementation(name = "snpe-release", ext = "aar")
-
-    // Google ARCore
-    implementation("com.google.ar:core:1.54.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.google.ar:core:1.45.0")
 }

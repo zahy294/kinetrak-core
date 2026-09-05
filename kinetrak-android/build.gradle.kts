@@ -1,13 +1,4 @@
-repositories {
-    flatDir {
-        dirs("libs")
-    }
-}
-
-dependencies {
-    // Qualcomm SNPE Java API
-    implementation(name = "snpe-release", ext = "aar")
-
-    // Google ARCore
-    implementation("com.google.ar:core:1.54.0")
+plugins {
+    id("com.android.application") version "8.7.0" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.20" apply false
 }

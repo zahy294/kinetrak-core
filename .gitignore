@@ -1,31 +1,62 @@
-# Android / Gradle
-*.iml
-.gradle
-/local.properties
-.idea/
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-app/build/
-*.apk
-*.ap_
-
 # Python
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+wheelhouse/
+*.whl
 *.egg-info/
+.installed.cfg
+*.egg
 .pytest_cache/
 
-# OS & IDE
-.DS_Store
-Thumbs.db
-*.swp
-.vscode/
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Android / Gradle
+.gradle/
+build/
+app/build/
+**/build/
+.kotlin/
+local.properties
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+captures/
+.externalNativeBuild/
+.cxx/
 
 # Raw Vendor SDK directory
 Qualcomm_SNPE/
 
+# IDE & Editor files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated
+.DS_Store
+Thumbs.db
+Desktop.ini
