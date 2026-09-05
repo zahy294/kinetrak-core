@@ -25,6 +25,45 @@ import threading
 import pyperclip
 
 
+def get_clipboard_text(max_retries=3, retry_delay=0.005):
+    """
+    Retrieves text from the Windows OS clipboard with retry logic and exception
+    suppression for OpenClipboard lock contention.
+    Tries win32clipboard first with retries/backoff, falling back to pyperclip.
+    """
+    for attempt in range(max_retries):
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                    return win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                    data = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+                    if isinstance(data, bytes):
+                        return data.decode("utf-8", errors="ignore")
+                    return str(data)
+                return ""
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+            break
+
+    for attempt in range(max_retries):
+        try:
+            import pyperclip
+            return pyperclip.paste()
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+            return ""
+    return ""
+
+
 class ClipboardWatcher:
     def __init__(self, state_callback):
         """
@@ -41,16 +80,17 @@ class ClipboardWatcher:
         self.is_stale = False  # Edge-trigger flag for the stale callback
         self.thread = None
         try:
-            self.last_clipboard_content = pyperclip.paste().strip()
+            self.last_clipboard_content = get_clipboard_text().strip()
         except Exception:
             self.last_clipboard_content = ""
 
     def start(self):
         """Starts the background clipboard polling thread."""
         self.running = True
-        self.thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self.thread.start()
-        print("[KineTrak] Clipboard watcher thread started.")
+        if self.thread is None or not self.thread.is_alive():
+            self.thread = threading.Thread(target=self._watch_loop, daemon=True)
+            self.thread.start()
+            print("[KineTrak] Clipboard watcher thread started.")
 
     def stop(self):
         """Stops the thread gracefully."""
@@ -59,44 +99,56 @@ class ClipboardWatcher:
             self.thread.join(timeout=1.0)
         print("[KineTrak] Clipboard watcher thread stopped.")
 
-    def _poll_loop(self):
+    def ensure_alive(self):
+        """Health check: verifies the watcher thread is active; auto-restarts if it terminated unexpectedly."""
+        if self.running and (self.thread is None or not self.thread.is_alive()):
+            print("[KineTrak] Clipboard watcher thread was unexpectedly dead. Auto-restarting...")
+            self.thread = threading.Thread(target=self._watch_loop, daemon=True)
+            self.thread.start()
+
+    def _watch_loop(self):
         """Polls the OS clipboard at ~60Hz to catch 15Hz mobile updates with minimal jitter."""
         while self.running:
             try:
-                raw_text = pyperclip.paste()
+                raw_text = get_clipboard_text()
                 if raw_text:
                     content = raw_text.strip()
                     if content != self.last_clipboard_content and (content.startswith("KT|") or content.startswith("{")):
                         self.last_clipboard_content = content
                         self._parse_payload(content)
-            except Exception:
-                # pyperclip can occasionally throw if the Win32 OS locks the clipboard
-                # mid-read during high frequency operations. Catch and ignore cleanly.
-                pass
+            except Exception as e:
+                # Catch unexpected errors during poll/parse, log, and keep loop alive
+                print(f"[KineTrak] Error in clipboard poll: {e}")
 
             # 500ms Stale Watchdog
-            if not self.is_stale and (time.time() - self.last_update_time > 0.5):
-                self.is_stale = True
-                self.state_callback({"state": 0, "stale": True})
+            try:
+                if not self.is_stale and (time.time() - self.last_update_time > 0.5):
+                    self.is_stale = True
+                    self.state_callback({"state": 0, "stale": True})
+            except Exception as e:
+                print(f"[KineTrak] Error in stale watchdog callback: {e}")
 
             time.sleep(0.016)  # ~60Hz polling interval
+
+    # Alias for backwards compatibility
+    _poll_loop = _watch_loop
 
     def _parse_payload(self, text: str):
         if not text:
             return
 
-        text = text.strip()
+        try:
+            text = text.strip()
 
-        # Primary Contract: KT|SEQ|STATE|X|Y|Z|QW|QX|QY|QZ|GESTURE_STATE|ACTION
-        if text.startswith("KT|"):
-            parts = text.split("|")
-            if len(parts) != 12:
-                return  # Malformed frame, drop instantly
+            # Primary Contract: KT|SEQ|STATE|X|Y|Z|QW|QX|QY|QZ|GESTURE_STATE|ACTION
+            if text.startswith("KT|"):
+                parts = text.split("|")
+                if len(parts) != 12:
+                    return  # Malformed frame, drop instantly
 
-            try:
                 seq = int(parts[1])
 
-                # Restart recovery: re-establish baseline when recovering from a stale gap
+                # Restart / Stale recovery: re-establish baseline when recovering from a stale gap
                 if self.is_stale:
                     self.last_seq = seq - 1
                     self.last_acted_seq = 0
@@ -137,22 +189,20 @@ class ClipboardWatcher:
                     "stale": False,
                 }
 
-                self.state_callback(parsed_data)
+                try:
+                    self.state_callback(parsed_data)
+                except Exception as cb_err:
+                    print(f"[KineTrak] Error in state_callback: {cb_err}")
 
-            except (ValueError, IndexError):
-                # Drop frame if float/int conversion fails due to corrupted text
-                return
-
-        # Legacy JSON Fallback
-        elif text.startswith("{"):
-            try:
+            # Legacy JSON Fallback
+            elif text.startswith("{"):
                 data = json.loads(text)
                 if not isinstance(data, dict):
                     return
 
                 seq = int(data.get("seq", self.last_seq + 1))
 
-                # Restart recovery: re-establish baseline when recovering from a stale gap
+                # Restart / Stale recovery: re-establish baseline when recovering from a stale gap
                 if self.is_stale:
                     self.last_seq = seq - 1
                     self.last_acted_seq = 0
@@ -193,7 +243,14 @@ class ClipboardWatcher:
                     "stale": False,
                 }
 
-                self.state_callback(parsed_data)
+                try:
+                    self.state_callback(parsed_data)
+                except Exception as cb_err:
+                    print(f"[KineTrak] Error in state_callback: {cb_err}")
 
-            except (json.JSONDecodeError, ValueError, TypeError, IndexError):
-                return
+        except (ValueError, IndexError, json.JSONDecodeError, TypeError) as e:
+            # Expected parsing failure on malformed frame
+            return
+        except Exception as e:
+            print(f"[KineTrak] Unexpected error parsing payload: {e}")
+            return
