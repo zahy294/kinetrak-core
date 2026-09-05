@@ -4,12 +4,34 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 object BridgeState {
-    val isTracking = AtomicBoolean(true)
-    val currentState = AtomicReference("IDLE")       // IDLE, RECORDING, THINKING, NULL
-    val pendingAction = AtomicReference("NULL")      // NULL, ACTION:SPAWN, ACTION:SELECT, ACTION:DELETE, ACTION:RESET
-    val isProcessing = AtomicBoolean(false)          // CAS lock for Dev 3's worker
+    const val STATE_IDLE = 1
+    const val STATE_RECORDING = 2
+    const val STATE_THINKING = 3
 
-    @Volatile var posX: Float = 0.0f
-    @Volatile var posY: Float = 0.0f
-    @Volatile var posZ: Float = 0.0f
+    @Volatile var currentState: Int = STATE_IDLE
+    @Volatile var gestureState: String = "IDLE"
+    @Volatile var isTrackingValid: Boolean = true
+
+    val currentPosition: FloatArray = FloatArray(3) // [x, y, z]
+    val currentRotation: FloatArray = floatArrayOf(1.0f, 0.0f, 0.0f, 0.0f) // [qw, qx, qy, qz]
+
+    val pendingAction: AtomicReference<String> = AtomicReference("NULL")
+
+    // Concurrency & compatibility properties
+    val isTracking = AtomicBoolean(true)
+    val isProcessing = AtomicBoolean(false)
+    val currentSeq = java.util.concurrent.atomic.AtomicInteger(1)
+    val isMicActive = AtomicBoolean(false)
+
+    var posX: Float
+        get() = currentPosition[0]
+        set(value) { currentPosition[0] = value }
+
+    var posY: Float
+        get() = currentPosition[1]
+        set(value) { currentPosition[1] = value }
+
+    var posZ: Float
+        get() = currentPosition[2]
+        set(value) { currentPosition[2] = value }
 }

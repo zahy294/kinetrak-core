@@ -96,6 +96,10 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                 qx = q[1]
                 qy = q[2]
                 qz = q[3]
+                BridgeState.currentRotation[0] = qw
+                BridgeState.currentRotation[1] = qx
+                BridgeState.currentRotation[2] = qy
+                BridgeState.currentRotation[3] = qz
             }
             Sensor.TYPE_ACCELEROMETER -> {
                 ax = event.values[0]
@@ -147,17 +151,20 @@ class ClipboardBridgeService : Service(), SensorEventListener {
 
             while (isActive) {
                 val seq = seqCounter.getAndIncrement()
-                val currentState = BridgeState.currentState.get()
+                BridgeState.currentSeq.set(seq)
+                val currentState = BridgeState.currentState
+                val gestureState = BridgeState.gestureState
 
                 // State Machine: buffer IMU frames during RECORDING
-                if (currentState == "RECORDING") {
+                if (currentState == BridgeState.STATE_RECORDING || gestureState == "RECORDING") {
                     val accelMagnitude = Math.sqrt((ax * ax + ay * ay + az * az).toDouble()).toFloat()
                     motionBuffer[bufferedFrames] = accelMagnitude
                     bufferedFrames++
 
                     if (bufferedFrames >= 45) {
                         // Switch to THINKING and classify gesture
-                        BridgeState.currentState.set("THINKING")
+                        BridgeState.currentState = BridgeState.STATE_THINKING
+                        BridgeState.gestureState = "THINKING"
                         val bufferSnapshot = motionBuffer.copyOf()
                         bufferedFrames = 0
 
@@ -178,33 +185,42 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Gesture classification failed", e)
                                 } finally {
-                                    BridgeState.currentState.set("IDLE")
+                                    BridgeState.currentState = BridgeState.STATE_IDLE
+                                    BridgeState.gestureState = "IDLE"
                                     BridgeState.isProcessing.set(false)
                                 }
                             }
                         }
                     }
-                } else if (currentState != "THINKING") {
+                } else if (currentState != BridgeState.STATE_THINKING && gestureState != "THINKING") {
                     bufferedFrames = 0
                 }
 
                 // Check for newly resolved actions and update 7-tick latch window (~500ms at 15Hz)
-                val newPendingAction = BridgeState.pendingAction.getAndSet("NULL")
-                if (newPendingAction != "NULL") {
+                val newPendingAction = BridgeState.pendingAction.get()
+                if (newPendingAction != "NULL" && activeLatchedAction == "NULL") {
                     activeLatchedAction = newPendingAction
                     latchTicksRemaining = 7
                 }
 
                 val actionToken = if (latchTicksRemaining > 0) {
                     latchTicksRemaining--
-                    activeLatchedAction
+                    val action = activeLatchedAction
+                    if (latchTicksRemaining == 0) {
+                        activeLatchedAction = "NULL"
+                        BridgeState.pendingAction.set("NULL")
+                        BridgeState.currentState = BridgeState.STATE_IDLE
+                        BridgeState.gestureState = "IDLE"
+                    }
+                    action
                 } else {
                     activeLatchedAction = "NULL"
+                    BridgeState.pendingAction.set("NULL")
                     "NULL"
                 }
 
-                val gestureState = BridgeState.currentState.get()
-                val trackingState = if (BridgeState.isTracking.get()) 1 else 0
+                val curGestureState = BridgeState.gestureState
+                val trackingState = if (BridgeState.isTrackingValid) 1 else 0
 
                 // Stream real translation and quaternion orientation from ARCore and phone hardware
                 val payload = String.format(
@@ -212,14 +228,14 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                     "KT|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s|%s",
                     seq,
                     trackingState,
-                    BridgeState.posX,
-                    BridgeState.posY,
-                    BridgeState.posZ,
-                    qw,
-                    qx,
-                    qy,
-                    qz,
-                    gestureState,
+                    BridgeState.currentPosition[0],
+                    BridgeState.currentPosition[1],
+                    BridgeState.currentPosition[2],
+                    BridgeState.currentRotation[0],
+                    BridgeState.currentRotation[1],
+                    BridgeState.currentRotation[2],
+                    BridgeState.currentRotation[3],
+                    curGestureState,
                     actionToken
                 )
 
@@ -228,7 +244,7 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                 withContext(Dispatchers.Main) {
                     val clip = ClipData.newPlainText("kt_stream", payload).apply {
                         description.extras = PersistableBundle().apply {
-                            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                            putBoolean("android.content.extra.IS_SENSITIVE", true)
                         }
                     }
                     clipboard.setPrimaryClip(clip)
