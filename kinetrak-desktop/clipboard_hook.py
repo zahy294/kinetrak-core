@@ -1,14 +1,15 @@
 """
 clipboard_hook.py — Dev 2 / kinetrak-desktop
 
-Background clipboard watcher implementing the TDD v4.1 contract:
-  - runs in its own thread so it never blocks the 60FPS PyOpenGL render loop
-  - drops malformed frames
-  - SEQ-based ACTION de-duplication (v4.1 S10.1) — executes an ACTION only the
-    first time a new SEQ carries it, ignoring the rest of its ~500ms latch window
-  - 500ms stale-data timeout, fired ONCE on transition (not every tick)
+Background clipboard watcher implementing the TDD v4.2 contract:
+  - runs in its own daemon thread so it never blocks the 60FPS PyOpenGL render loop
+  - drops malformed frames (pipe format requires 12 fields, JSON fallback must be valid dict)
+  - SEQ-based ACTION de-duplication (v4.2 S10.1) — executes an ACTION only on state
+    transitions or sequence gaps >10 ticks, ignoring the rest of its ~500ms latch window
+  - 500ms stale-data timeout, fired ONCE on transition (edge-triggered)
   - recovers automatically after an Android-side app restart, using the stale
-    timeout itself as the reset signal (see _parse_payload)
+    timeout state itself as the reset signal (see _parse_payload)
+  - suppresses temporary Win32 clipboard locking collisions cleanly
 
 IMPORTANT — thread safety: state_callback runs on THIS background thread, not
 the main render thread. It must only write plain data into a shared state
@@ -35,9 +36,9 @@ class ClipboardWatcher:
         self.running = False
         self.last_seq = 0
         self.last_acted_seq = 0
-        self.last_action = "NULL"
+        self.last_action = "NULL"  # Tracks active latched action token
         self.last_update_time = time.time()
-        self.is_stale = False  # edge-trigger flag for the stale callback
+        self.is_stale = False  # Edge-trigger flag for the stale callback
         self.thread = None
         try:
             self.last_clipboard_content = pyperclip.paste().strip()
@@ -47,42 +48,38 @@ class ClipboardWatcher:
     def start(self):
         """Starts the background clipboard polling thread."""
         self.running = True
-        self.thread = threading.Thread(target=self._watch_loop, daemon=True)
+        self.thread = threading.Thread(target=self._poll_loop, daemon=True)
         self.thread.start()
         print("[KineTrak] Clipboard watcher thread started.")
 
     def stop(self):
         """Stops the thread gracefully."""
         self.running = False
-        if self.thread:
-            self.thread.join()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
         print("[KineTrak] Clipboard watcher thread stopped.")
 
-    def _watch_loop(self):
+    def _poll_loop(self):
+        """Polls the OS clipboard at ~60Hz to catch 15Hz mobile updates with minimal jitter."""
         while self.running:
             try:
-                raw = pyperclip.paste()
-                if raw:
-                    content = raw.strip()
+                raw_text = pyperclip.paste()
+                if raw_text:
+                    content = raw_text.strip()
                     if content != self.last_clipboard_content and (content.startswith("KT|") or content.startswith("{")):
                         self.last_clipboard_content = content
                         self._parse_payload(content)
-
             except Exception:
-                # pyperclip can occasionally throw if the OS locks the clipboard
-                # mid-read. In a hackathon, catch and ignore so the thread survives.
+                # pyperclip can occasionally throw if the Win32 OS locks the clipboard
+                # mid-read during high frequency operations. Catch and ignore cleanly.
                 pass
 
-            # Poll at ~60Hz (16ms) to comfortably catch the phone's 15Hz (66ms) writes
-            time.sleep(0.016)
-
-            # Stale-data timeout — fire the "tracking lost" callback ONCE on the
-            # transition into staleness, not on every loop tick. Firing repeatedly
-            # with a partial {"state": 0} dict would otherwise stomp other fields
-            # in shared state 60x/sec.
-            if time.time() - self.last_update_time > 0.5 and not self.is_stale:
+            # 500ms Stale Watchdog
+            if not self.is_stale and (time.time() - self.last_update_time > 0.5):
                 self.is_stale = True
-                self.state_callback({"state": 0})
+                self.state_callback({"state": 0, "stale": True})
+
+            time.sleep(0.016)  # ~60Hz polling interval
 
     def _parse_payload(self, text: str):
         if not text:
@@ -90,27 +87,23 @@ class ClipboardWatcher:
 
         text = text.strip()
 
-        # Contract: KT|SEQ|STATE|X|Y|Z|QW|QX|QY|QZ|GESTURE_STATE|ACTION
+        # Primary Contract: KT|SEQ|STATE|X|Y|Z|QW|QX|QY|QZ|GESTURE_STATE|ACTION
         if text.startswith("KT|"):
             parts = text.split("|")
             if len(parts) != 12:
-                return  # malformed frame, drop instantly
+                return  # Malformed frame, drop instantly
 
             try:
                 seq = int(parts[1])
 
-                # Restart recovery: if we were stale (no valid frame for >500ms) and a
-                # new frame just arrived, treat it as a fresh session regardless of its
-                # SEQ value — an Android-side restart resets SEQ to a low number, and
-                # without this the old high last_seq/last_acted_seq would cause every
-                # subsequent frame to be silently dropped forever.
+                # Restart recovery: re-establish baseline when recovering from a stale gap
                 if self.is_stale:
                     self.last_seq = seq - 1
                     self.last_acted_seq = 0
                     self.last_action = "NULL"
                     self.is_stale = False
 
-                # Drop out-of-order or duplicate SEQ updates
+                # Drop out-of-order or duplicate SEQ packets
                 if seq <= self.last_seq and self.last_seq != 0:
                     return
 
@@ -124,8 +117,7 @@ class ClipboardWatcher:
                 gesture_state = parts[10]
                 raw_action = parts[11]
 
-                # SEQ & State based ACTION de-duplication (TDD v4.1 S10.1)
-                # Only trigger an action the FIRST time it appears in a new latch window.
+                # SEQ & State based ACTION de-duplication (TDD v4.2 §4.2)
                 action_to_execute = "NULL"
                 if raw_action != "NULL":
                     if raw_action != self.last_action or (seq - self.last_acted_seq > 10):
@@ -142,14 +134,16 @@ class ClipboardWatcher:
                     "rot": [qw, qx, qy, qz],
                     "gesture_state": gesture_state,
                     "action": action_to_execute,
+                    "stale": False,
                 }
 
                 self.state_callback(parsed_data)
 
             except (ValueError, IndexError):
-                # Drop frame if float/int conversion fails due to corrupted clipboard text
+                # Drop frame if float/int conversion fails due to corrupted text
                 return
 
+        # Legacy JSON Fallback
         elif text.startswith("{"):
             try:
                 data = json.loads(text)
@@ -158,7 +152,7 @@ class ClipboardWatcher:
 
                 seq = int(data.get("seq", self.last_seq + 1))
 
-                # Restart recovery
+                # Restart recovery: re-establish baseline when recovering from a stale gap
                 if self.is_stale:
                     self.last_seq = seq - 1
                     self.last_acted_seq = 0
@@ -196,6 +190,7 @@ class ClipboardWatcher:
                     "rot": [float(rot[0]), float(rot[1]), float(rot[2]), float(rot[3])] if isinstance(rot, (list, tuple)) and len(rot) == 4 else [1.0, 0.0, 0.0, 0.0],
                     "gesture_state": gesture_state,
                     "action": action_to_execute,
+                    "stale": False,
                 }
 
                 self.state_callback(parsed_data)
