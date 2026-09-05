@@ -222,32 +222,34 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                 val curGestureState = BridgeState.gestureState
                 val trackingState = if (BridgeState.isTrackingValid) 1 else 0
 
-                // Stream real translation and quaternion orientation from ARCore and phone hardware
-                val payload = String.format(
-                    Locale.US,
-                    "KT|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s|%s",
-                    seq,
-                    trackingState,
-                    BridgeState.currentPosition[0],
-                    BridgeState.currentPosition[1],
-                    BridgeState.currentPosition[2],
-                    BridgeState.currentRotation[0],
-                    BridgeState.currentRotation[1],
-                    BridgeState.currentRotation[2],
-                    BridgeState.currentRotation[3],
-                    curGestureState,
-                    actionToken
-                )
+                // Emission Gating: Only emit 12-field telemetry if tracking/streaming is active
+                if (BridgeState.isStreamingActive) {
+                    val payload = String.format(
+                        Locale.US,
+                        "KT|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s|%s",
+                        seq,
+                        trackingState,
+                        BridgeState.currentPosition[0],
+                        BridgeState.currentPosition[1],
+                        BridgeState.currentPosition[2],
+                        BridgeState.currentRotation[0],
+                        BridgeState.currentRotation[1],
+                        BridgeState.currentRotation[2],
+                        BridgeState.currentRotation[3],
+                        curGestureState,
+                        actionToken
+                    )
 
-                Log.i("KineTrak", "Emitting: $payload")
+                    Log.i("KineTrak", "Emitting: $payload")
 
-                withContext(Dispatchers.Main) {
-                    val clip = ClipData.newPlainText("kt_stream", payload).apply {
-                        description.extras = PersistableBundle().apply {
-                            putBoolean("android.content.extra.IS_SENSITIVE", true)
+                    withContext(Dispatchers.Main) {
+                        val clip = ClipData.newPlainText("kt_stream", payload).apply {
+                            description.extras = PersistableBundle().apply {
+                                putBoolean("android.content.extra.IS_SENSITIVE", true)
+                            }
                         }
+                        clipboard.setPrimaryClip(clip)
                     }
-                    clipboard.setPrimaryClip(clip)
                 }
 
                 delay(66) // 15Hz decimation rate

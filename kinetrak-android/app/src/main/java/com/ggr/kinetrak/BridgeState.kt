@@ -11,17 +11,19 @@ object BridgeState {
     @Volatile var currentState: Int = STATE_IDLE
     @Volatile var gestureState: String = "IDLE"
     @Volatile var isTrackingValid: Boolean = true
+    @Volatile var isStreamingActive: Boolean = false
 
     val currentPosition: FloatArray = FloatArray(3) // [x, y, z]
     val currentRotation: FloatArray = floatArrayOf(1.0f, 0.0f, 0.0f, 0.0f) // [qw, qx, qy, qz]
 
     val pendingAction: AtomicReference<String> = AtomicReference("NULL")
 
+    @Volatile var isMicActive: Boolean = false
+
     // Concurrency & compatibility properties
     val isTracking = AtomicBoolean(true)
     val isProcessing = AtomicBoolean(false)
     val currentSeq = java.util.concurrent.atomic.AtomicInteger(1)
-    val isMicActive = AtomicBoolean(false)
 
     var posX: Float
         get() = currentPosition[0]

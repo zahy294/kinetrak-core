@@ -19,6 +19,9 @@
     <color name="hud_tracking_off">#FF5252</color>
     
     <!-- Button & FAB Colors -->
+    <color name="dark_base">#0B0E14</color>
+    <color name="btn_tracking_start">#00FF66</color>
+    <color name="btn_tracking_stop">#FF3366</color>
     <color name="fab_export_bg">#00E5FF</color>
     <color name="fab_export_text">#000000</color>
     <color name="fab_mic_active">#FF1744</color>

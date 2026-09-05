@@ -4,20 +4,22 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -42,20 +44,44 @@ class MainActivity : AppCompatActivity() {
 
     // UI View References
     private lateinit var viewFinder: PreviewView
-    private lateinit var cardStateBadge: MaterialCardView
     private lateinit var tvStateBadge: TextView
-    private lateinit var tvHudSeq: TextView
-    private lateinit var tvHudTracking: TextView
-    private lateinit var tvHudPose: TextView
-    private lateinit var tvHudAction: TextView
+    private lateinit var tvTelemetrySeq: TextView
+    private lateinit var tvTelemetryTracking: TextView
+    private lateinit var tvTelemetryPose: TextView
+    private lateinit var tvTelemetryAction: TextView
     private lateinit var fabExport: ExtendedFloatingActionButton
     private lateinit var fabMicToggle: FloatingActionButton
+    private lateinit var btnToggleTracking: MaterialButton
 
     private var cameraProvider: ProcessCameraProvider? = null
 
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Log.i("KineTrak", "RECORD_AUDIO permission granted")
+        } else {
+            Log.w("KineTrak", "RECORD_AUDIO permission denied")
+        }
+    }
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val cameraGranted = permissions[Manifest.permission.CAMERA] ?: (
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+        if (cameraGranted) {
+            onPermissionsGranted()
+        } else {
+            Log.w(TAG, "Camera permission was not granted; ARCore tracking unavailable. Falling back to IMU telemetry.")
+            enableImuFallback()
+            startBridgeService()
+        }
+    }
+
     companion object {
         private const val TAG = "MainActivity"
-        private const val PERMISSION_REQ_CODE = 101
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,23 +96,50 @@ class MainActivity : AppCompatActivity() {
 
     private fun initViews() {
         viewFinder = findViewById(R.id.viewFinder)
-        cardStateBadge = findViewById(R.id.cardStateBadge)
         tvStateBadge = findViewById(R.id.tvStateBadge)
-        tvHudSeq = findViewById(R.id.tvHudSeq)
-        tvHudTracking = findViewById(R.id.tvHudTracking)
-        tvHudPose = findViewById(R.id.tvHudPose)
-        tvHudAction = findViewById(R.id.tvHudAction)
+        tvTelemetrySeq = findViewById(R.id.tvTelemetrySeq)
+        tvTelemetryTracking = findViewById(R.id.tvTelemetryTracking)
+        tvTelemetryPose = findViewById(R.id.tvTelemetryPose)
+        tvTelemetryAction = findViewById(R.id.tvTelemetryAction)
         fabExport = findViewById(R.id.fabExport)
         fabMicToggle = findViewById(R.id.fabMicToggle)
+        btnToggleTracking = findViewById(R.id.btnToggleTracking)
+        updateTrackingButtonUi()
+        updateMicToggleUi()
     }
 
     private fun setupListeners() {
+        btnToggleTracking.setOnClickListener {
+            toggleTracking()
+        }
+
         fabExport.setOnClickListener {
             exportTrajectoryCsv()
         }
 
         fabMicToggle.setOnClickListener {
             toggleMicTrigger()
+        }
+    }
+
+    private fun toggleTracking() {
+        BridgeState.isStreamingActive = !BridgeState.isStreamingActive
+        updateTrackingButtonUi()
+    }
+
+    private fun updateTrackingButtonUi() {
+        if (BridgeState.isStreamingActive) {
+            btnToggleTracking.text = "STOP TRACKING"
+            btnToggleTracking.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.btn_tracking_stop)
+            )
+            btnToggleTracking.setTextColor(ContextCompat.getColor(this, R.color.white))
+        } else {
+            btnToggleTracking.text = "START TRACKING"
+            btnToggleTracking.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.btn_tracking_start)
+            )
+            btnToggleTracking.setTextColor(ContextCompat.getColor(this, R.color.black))
         }
     }
 
@@ -116,33 +169,7 @@ class MainActivity : AppCompatActivity() {
         if (neededPermissions.isEmpty()) {
             onPermissionsGranted()
         } else {
-            ActivityCompat.requestPermissions(
-                this,
-                neededPermissions.toTypedArray(),
-                PERMISSION_REQ_CODE
-            )
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQ_CODE) {
-            val cameraGranted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (cameraGranted) {
-                onPermissionsGranted()
-            } else {
-                Log.w(TAG, "Camera permission was not granted; ARCore tracking unavailable. Falling back to IMU telemetry.")
-                enableImuFallback()
-                startBridgeService()
-            }
+            permissionLauncher.launch(neededPermissions.toTypedArray())
         }
     }
 
@@ -200,16 +227,16 @@ class MainActivity : AppCompatActivity() {
         val currentState = BridgeState.currentState
 
         // 1. Update Monospace HUD Fields
-        tvHudSeq.text = String.format(Locale.US, "SEQ: %d", seq)
-        tvHudTracking.text = String.format(Locale.US, "TRACKING: %d", trackingState)
-        tvHudTracking.setTextColor(
+        tvTelemetrySeq.text = String.format(Locale.US, "SEQ: %d", seq)
+        tvTelemetryTracking.text = String.format(Locale.US, "TRACKING: %d", trackingState)
+        tvTelemetryTracking.setTextColor(
             ContextCompat.getColor(
                 this,
                 if (isTracking) R.color.hud_tracking_on else R.color.hud_tracking_off
             )
         )
 
-        tvHudPose.text = String.format(
+        tvTelemetryPose.text = String.format(
             Locale.US,
             "POS: [%+.2f, %+.2f, %+.2f]",
             BridgeState.posX,
@@ -217,12 +244,12 @@ class MainActivity : AppCompatActivity() {
             BridgeState.posZ
         )
 
-        tvHudAction.text = String.format(Locale.US, "ACTION: %s", pendingAction)
+        tvTelemetryAction.text = String.format(Locale.US, "ACTION: %s", pendingAction)
 
         // 2. Dynamic State Indicator Badge
         if (pendingAction != "NULL") {
             // Neon Green: ACTION DISPATCHED
-            cardStateBadge.setCardBackgroundColor(
+            tvStateBadge.setBackgroundColor(
                 ContextCompat.getColor(this, R.color.badge_action_neon_green)
             )
             tvStateBadge.setTextColor(ContextCompat.getColor(this, R.color.black))
@@ -231,7 +258,7 @@ class MainActivity : AppCompatActivity() {
             when (currentState) {
                 BridgeState.STATE_RECORDING -> {
                     // Yellow: RECORDING
-                    cardStateBadge.setCardBackgroundColor(
+                    tvStateBadge.setBackgroundColor(
                         ContextCompat.getColor(this, R.color.badge_recording_yellow)
                     )
                     tvStateBadge.setTextColor(ContextCompat.getColor(this, R.color.black))
@@ -239,7 +266,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 BridgeState.STATE_THINKING -> {
                     // Purple: THINKING
-                    cardStateBadge.setCardBackgroundColor(
+                    tvStateBadge.setBackgroundColor(
                         ContextCompat.getColor(this, R.color.badge_thinking_purple)
                     )
                     tvStateBadge.setTextColor(ContextCompat.getColor(this, R.color.white))
@@ -247,7 +274,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 else -> {
                     // Cyan: IDLE
-                    cardStateBadge.setCardBackgroundColor(
+                    tvStateBadge.setBackgroundColor(
                         ContextCompat.getColor(this, R.color.badge_idle_cyan)
                     )
                     tvStateBadge.setTextColor(ContextCompat.getColor(this, R.color.black))
@@ -261,20 +288,25 @@ class MainActivity : AppCompatActivity() {
      * Mic Toggle FAB for offline voice trigger
      */
     private fun toggleMicTrigger() {
-        val current = BridgeState.isMicActive.get()
-        val newState = !current
-        BridgeState.isMicActive.set(newState)
+        BridgeState.isMicActive = !BridgeState.isMicActive
+        updateMicToggleUi()
 
-        if (newState) {
-            fabMicToggle.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.fab_mic_active)
-            )
-            Toast.makeText(this, "Voice Trigger: Listening...", Toast.LENGTH_SHORT).show()
+        if (BridgeState.isMicActive) {
+            Log.i("KineTrak", "Voice trigger window active")
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun updateMicToggleUi() {
+        if (BridgeState.isMicActive) {
+            fabMicToggle.imageTintList = ColorStateList.valueOf(Color.parseColor("#00FF66"))
         } else {
-            fabMicToggle.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.fab_mic_idle)
-            )
-            Toast.makeText(this, "Voice Trigger: Off", Toast.LENGTH_SHORT).show()
+            fabMicToggle.imageTintList = ColorStateList.valueOf(Color.parseColor("#00E5FF"))
         }
     }
 
