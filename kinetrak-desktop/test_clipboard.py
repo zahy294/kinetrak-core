@@ -1,3 +1,10 @@
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import time
 import pyperclip
 from clipboard_hook import ClipboardWatcher

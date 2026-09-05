@@ -38,6 +38,10 @@ class ClipboardWatcher:
         self.last_update_time = time.time()
         self.is_stale = False  # edge-trigger flag for the stale callback
         self.thread = None
+        try:
+            self.last_clipboard_content = pyperclip.paste().strip()
+        except Exception:
+            self.last_clipboard_content = ""
 
     def start(self):
         """Starts the background clipboard polling thread."""
@@ -54,14 +58,12 @@ class ClipboardWatcher:
         print("[KineTrak] Clipboard watcher thread stopped.")
 
     def _watch_loop(self):
-        last_clipboard_content = ""
-
         while self.running:
             try:
                 content = pyperclip.paste().strip()
 
-                if content != last_clipboard_content and content.startswith("KT|"):
-                    last_clipboard_content = content
+                if content != self.last_clipboard_content and content.startswith("KT|"):
+                    self.last_clipboard_content = content
                     self._parse_payload(content)
 
             except Exception:

@@ -1,11 +1,10 @@
-package com.example.kinetrak_android
+package com.ggr.kinetrak
 
 import android.app.Application
 import android.util.Log
 import com.qualcomm.qti.snpe.NeuralNetwork
 import com.qualcomm.qti.snpe.SNPE
 import com.qualcomm.qti.snpe.FloatTensor
-import java.io.File
 import java.io.InputStream
 
 class SnapdragonNPU(private val application: Application) {

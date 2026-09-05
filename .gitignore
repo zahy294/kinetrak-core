@@ -42,6 +42,7 @@ local.properties
 *.dex
 *.class
 captures/
+*.hprof
 .externalNativeBuild/
 .cxx/
 
