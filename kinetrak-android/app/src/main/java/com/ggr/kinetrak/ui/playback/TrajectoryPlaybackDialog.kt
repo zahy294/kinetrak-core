@@ -180,7 +180,12 @@ class TrajectoryPlaybackDialog : DialogFragment() {
             initialAction
         }
 
-        tvPlaybackLength.text = String.format(Locale.US, "LEN: %.2f m", pathLen)
+        tvPlaybackLength.text = String.format(
+            Locale.US,
+            "TAU: %.2f | LEN: %.2fm",
+            renderer.tortuosity,
+            renderer.totalPathLengthMeters
+        )
         tvPlaybackSamples.text = "$totalPts pts"
 
         // Action badge styling

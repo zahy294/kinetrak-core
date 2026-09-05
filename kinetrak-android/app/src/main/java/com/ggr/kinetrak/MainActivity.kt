@@ -19,6 +19,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.ggr.kinetrak.math.OneEuroFilter3D
 import com.ggr.kinetrak.storage.SessionStorageManager
 import com.ggr.kinetrak.ui.SessionHistoryBottomSheet
 import com.google.android.material.button.MaterialButton
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private var arSession: Session? = null
     private var isArTrackingActive = false
     private val volumeKeyLock = AtomicBoolean(false)
+    private val oneEuroFilter3D = OneEuroFilter3D()
 
     // UI View References
     private lateinit var viewFinder: PreviewView
@@ -133,6 +135,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleTracking() {
         BridgeState.isStreamingActive = !BridgeState.isStreamingActive
+        if (BridgeState.isStreamingActive) {
+            oneEuroFilter3D.reset()
+        }
         updateTrackingButtonUi()
     }
 
@@ -336,14 +341,20 @@ class MainActivity : AppCompatActivity() {
             // Write CSV Header
             sb.append("seq,timestamp_ms,tracking_state,pos_x,pos_y,pos_z,qw,qx,qy,qz,gesture_state,action\n")
 
-            // Generate representative 6-DOF waypoints leading up to current frame
+            // Generate representative 6-DOF waypoints leading up to current frame using filtered positions
+            val exportFilter = OneEuroFilter3D()
             for (i in 0..60) {
                 val s = startSeq + i
                 val t = baseTime + (i * 66)
+                val tSec = t / 1000.0
                 val tRad = (i * 0.1).toFloat()
-                val x = BridgeState.posX + (0.05f * kotlin.math.sin(tRad))
-                val y = BridgeState.posY + (0.03f * kotlin.math.cos(tRad))
-                val z = BridgeState.posZ - (0.02f * i)
+                val rawX = BridgeState.posX + (0.05f * kotlin.math.sin(tRad))
+                val rawY = BridgeState.posY + (0.03f * kotlin.math.cos(tRad))
+                val rawZ = BridgeState.posZ - (0.02f * i)
+                val filtered = exportFilter.filter(floatArrayOf(rawX, rawY, rawZ), tSec)
+                val x = filtered[0]
+                val y = filtered[1]
+                val z = filtered[2]
                 val qw = BridgeState.currentRotation[0]
                 val qx = BridgeState.currentRotation[1]
                 val qy = BridgeState.currentRotation[2]
@@ -419,6 +430,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enableImuFallback() {
+        oneEuroFilter3D.reset()
         BridgeState.isTrackingValid = true
         BridgeState.isTracking.set(true)
         BridgeState.posX = 0.0f
@@ -479,15 +491,22 @@ class MainActivity : AppCompatActivity() {
                         val frame = session.update()
                         val camera = frame.camera
                         if (camera.trackingState == TrackingState.TRACKING) {
-                            val translation = camera.pose.translation
-                            BridgeState.posX = translation[0]
-                            BridgeState.posY = translation[1]
-                            BridgeState.posZ = translation[2]
+                            val timestampSec = if (frame.timestamp > 0L) {
+                                frame.timestamp / 1_000_000_000.0
+                            } else {
+                                System.nanoTime() / 1_000_000_000.0
+                            }
+                            val rawTranslation = camera.pose.translation
+                            val filteredTranslation = oneEuroFilter3D.filter(rawTranslation, timestampSec)
+                            BridgeState.posX = filteredTranslation[0]
+                            BridgeState.posY = filteredTranslation[1]
+                            BridgeState.posZ = filteredTranslation[2]
                             BridgeState.isTrackingValid = true
                             BridgeState.isTracking.set(true)
                         } else {
-                            BridgeState.isTrackingValid = true
-                            BridgeState.isTracking.set(true)
+                            oneEuroFilter3D.reset()
+                            BridgeState.isTrackingValid = false
+                            BridgeState.isTracking.set(false)
                         }
                     } catch (e: Exception) {
                         // Frame update may fail when paused or camera unavailable
@@ -523,6 +542,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         isArTrackingActive = false
+        oneEuroFilter3D.reset()
         try {
             arSession?.pause()
         } catch (e: Exception) {

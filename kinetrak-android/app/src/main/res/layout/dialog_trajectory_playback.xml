@@ -126,11 +126,11 @@
                     android:paddingTop="4dp"
                     android:paddingEnd="8dp"
                     android:paddingBottom="4dp"
-                    android:text="LEN: 1.42 m"
+                    android:text="TAU: 1.14 | LEN: 0.82m"
                     android:textColor="@color/hud_text_secondary"
                     android:textSize="11sp"
                     android:textStyle="bold"
-                    tools:text="LEN: 1.42 m" />
+                    tools:text="TAU: 1.14 | LEN: 0.82m" />
 
                 <TextView
                     android:id="@+id/tvPlaybackSamples"

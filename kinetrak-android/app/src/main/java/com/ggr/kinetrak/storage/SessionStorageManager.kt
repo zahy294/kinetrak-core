@@ -2,6 +2,7 @@ package com.ggr.kinetrak.storage
 
 import android.content.Context
 import android.util.Log
+import com.ggr.kinetrak.math.OneEuroFilter3D
 import com.ggr.kinetrak.model.SessionRecord
 import org.json.JSONArray
 import java.io.File
@@ -54,8 +55,12 @@ class SessionStorageManager private constructor(context: Context) {
         val fileName = "$id.csv"
 
         val targetFile = File(sessionsDir, fileName)
+        val waypointsFile = File(sessionsDir, "trajectory_waypoints.csv")
         try {
             FileWriter(targetFile).use { writer ->
+                writer.write(csvData)
+            }
+            FileWriter(waypointsFile).use { writer ->
                 writer.write(csvData)
             }
         } catch (e: Exception) {
@@ -165,17 +170,23 @@ class SessionStorageManager private constructor(context: Context) {
         val baseTimestamp = System.currentTimeMillis() - 60000L
 
         try {
+            val filter = OneEuroFilter3D()
             FileWriter(sampleFile).use { writer ->
                 writer.append("seq,timestamp_ms,tracking_state,pos_x,pos_y,pos_z,qw,qx,qy,qz,gesture_state,action\n")
                 for (i in 0 until sampleCount) {
                     val seq = i + 1
                     val t = i / 59.0
                     val timestampMs = baseTimestamp + (i * 66L)
+                    val timestampSec = timestampMs / 1000.0
 
-                    // 1. Trajectory Translation: Sweeping 3D spatial arc
-                    val x = (0.5 * sin(2.0 * Math.PI * t)).toFloat()
-                    val y = (0.2 * sin(4.0 * Math.PI * t)).toFloat()
-                    val z = (-0.3 - 0.4 * t).toFloat()
+                    // 1. Trajectory Translation: Sweeping 3D spatial arc with 1€ filter smoothing
+                    val rawX = (0.5 * sin(2.0 * Math.PI * t)).toFloat()
+                    val rawY = (0.2 * sin(4.0 * Math.PI * t)).toFloat()
+                    val rawZ = (-0.3 - 0.4 * t).toFloat()
+                    val filtered = filter.filter(floatArrayOf(rawX, rawY, rawZ), timestampSec)
+                    val x = filtered[0]
+                    val y = filtered[1]
+                    val z = filtered[2]
 
                     // 2. Dynamic 6-DOF Quaternion Rotation: Roll 180 deg + Pitch 45 deg + Yaw oscillation
                     val thetaPitch = 0.785 * sin(Math.PI * t)
@@ -238,14 +249,20 @@ class SessionStorageManager private constructor(context: Context) {
         val baseTimestamp = System.currentTimeMillis() - 180000L
 
         try {
+            val filter = OneEuroFilter3D()
             FileWriter(sampleFile).use { writer ->
                 writer.append("seq,timestamp_ms,tracking_state,pos_x,pos_y,pos_z,qw,qx,qy,qz,gesture_state,action\n")
                 for (i in 1..sampleCount) {
                     val t = baseTimestamp + (i * 66)
+                    val timestampSec = t / 1000.0
                     val rad = (i * 0.12).toFloat()
-                    val x = 0.15f * sin(rad)
-                    val y = -0.05f + (0.08f * cos(rad))
-                    val z = -0.40f - (0.015f * i)
+                    val rawX = 0.15f * sin(rad)
+                    val rawY = -0.05f + (0.08f * cos(rad))
+                    val rawZ = -0.40f - (0.015f * i)
+                    val filtered = filter.filter(floatArrayOf(rawX, rawY, rawZ), timestampSec)
+                    val x = filtered[0]
+                    val y = filtered[1]
+                    val z = filtered[2]
                     val qw = 0.985f
                     val qx = 0.050f * sin(rad)
                     val qy = 0.150f * cos(rad)

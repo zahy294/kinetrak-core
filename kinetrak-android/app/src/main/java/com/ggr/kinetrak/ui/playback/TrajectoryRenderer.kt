@@ -101,6 +101,10 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     private val waypoints = mutableListOf<Waypoint3D>()
     var totalPathLengthMeters: Float = 0.0f
         private set
+    var displacementMeters: Float = 0.0f
+        private set
+    var tortuosity: Float = 1.0f
+        private set
     var detectedAction: String = "IDLE"
         private set
 
@@ -185,6 +189,8 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     private fun computeTrajectoryStatsAndGeometry() {
         if (waypoints.isEmpty()) {
             totalPathLengthMeters = 0.0f
+            displacementMeters = 0.0f
+            tortuosity = 1.0f
             detectedAction = "IDLE"
             return
         }
@@ -221,7 +227,17 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
             }
         }
 
+        val firstWp = waypoints.first()
+        val lastWp = waypoints.last()
+        val dispDx = lastWp.x - firstWp.x
+        val dispDy = lastWp.y - firstWp.y
+        val dispDz = lastWp.z - firstWp.z
+        val displacement = sqrt((dispDx * dispDx + dispDy * dispDy + dispDz * dispDz).toDouble()).toFloat()
+        val tau = distSum / maxOf(displacement, 1e-4f)
+
         totalPathLengthMeters = distSum
+        displacementMeters = displacement
+        tortuosity = tau
         detectedAction = latchedAction
 
         centerX = (minX + maxX) / 2.0f
