@@ -8,6 +8,7 @@ import time
 import math
 import argparse
 import threading
+from collections import deque
 import pygame
 from pygame.locals import *
 from OpenGL.GL import *
@@ -66,6 +67,10 @@ class HostEngine:
         # CAD Visual Demonstration State (e.g., Explode offset)
         self.explode_factor = 0.0
         self.target_explode = 0.0
+
+        # Trajectory Ribbon History (Dev 3 feature)
+        self.trajectory_history = deque(maxlen=240)
+        self.show_trajectory = True
 
         # Test and synthetic execution modes
         self.test_frames = test_frames
@@ -134,6 +139,7 @@ class HostEngine:
         elif action in ("RESET", "ACTION:RESET"):
             self.target_explode = 0.0
             self.origin_pos = None
+            self.trajectory_history.clear()
             self.calib_display_timer = time.time() + 2.0
             print("[ACTION TRIGGERED] RESET VIEWPORT & ORIGIN")
 
@@ -150,6 +156,10 @@ class HostEngine:
 
         # 3. Smooth Explode Factor
         self.explode_factor += (self.target_explode - self.explode_factor) * 0.1
+
+        # 4. Record 3D Trajectory Ribbon during RECORDING gesture
+        if self.is_tracking_valid and not self.is_stale and self.gesture_state == "RECORDING":
+            self.trajectory_history.append(self.curr_pos.copy())
 
     def init_gl(self):
         """Sets up 3D perspective projection and depth testing."""
@@ -211,6 +221,65 @@ class HostEngine:
         self.draw_cube_face((-0.5, -0.5, 0.55), (0.5, -0.5, 0.55), (0.5, 0.5, 0.55), (-0.5, 0.5, 0.55), (0, 0, 1), c_front)
         glEnd()
         glPopMatrix()
+
+    def draw_infinite_floor_grid(self, extent=25.0, step=1.0):
+        """Renders an infinite-styled 3D ground grid along the X-Z plane."""
+        glDisable(GL_LIGHTING)
+        glLineWidth(1.0)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBegin(GL_LINES)
+
+        i = -extent
+        while i <= extent + 0.001:
+            dist_factor = 1.0 - (abs(i) / extent) * 0.6
+            if abs(i) < 0.001:
+                glColor4f(0.25, 0.55, 0.95, 0.85)  # Blue axis
+            elif abs(i % 5.0) < 0.001:
+                glColor4f(0.28, 0.35, 0.48, 0.70 * dist_factor)
+            else:
+                glColor4f(0.14, 0.18, 0.26, 0.40 * dist_factor)
+
+            # Lines parallel to Z
+            glVertex3f(i, -2.0, -extent)
+            glVertex3f(i, -2.0, extent)
+
+            # Lines parallel to X
+            glVertex3f(-extent, -2.0, i)
+            glVertex3f(extent, -2.0, i)
+            i += step
+
+        glEnd()
+        glEnable(GL_LIGHTING)
+
+    def draw_trajectory_ribbon(self):
+        """
+        Renders 3D trajectory ribbon using GL_LINE_STRIP with distance-based alpha fading
+        and continuous Cyan -> Amber gradient (Dev 3 feature).
+        """
+        if not self.show_trajectory or len(self.trajectory_history) < 2:
+            return
+
+        glDisable(GL_LIGHTING)
+        glLineWidth(3.5)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBegin(GL_LINE_STRIP)
+
+        n_pts = len(self.trajectory_history)
+        for i, pt in enumerate(self.trajectory_history):
+            t = i / max(1, n_pts - 1)
+            alpha = 0.15 + 0.85 * (t ** 1.5)
+
+            # Continuous Cyan (0.0, 0.9, 1.0) -> Amber (1.0, 0.75, 0.0) color gradient
+            r = (1.0 - t) * 0.0 + t * 1.0
+            g = (1.0 - t) * 0.9 + t * 0.75
+            b = (1.0 - t) * 1.0 + t * 0.0
+            glColor4f(r, g, b, alpha)
+            glVertex3f(pt[0], pt[1], pt[2])
+
+        glEnd()
+        glEnable(GL_LIGHTING)
 
     def render_hud(self):
         """Renders 2D HUD text overlay displaying telemetry and state."""
@@ -290,7 +359,7 @@ class HostEngine:
             glDrawPixels(w, h, GL_RGBA, GL_UNSIGNED_BYTE, text_data)
 
         # Footer instructions
-        footer_str = "[R] Recalibrate Origin | [SPACE] Trigger Explode | [T] Synthetic Mode | [ESC] Exit"
+        footer_str = "[R] Recalibrate Origin | [SPACE] Explode | [C] Clear Ribbon | [T] Synthetic Mode | [ESC] Exit"
         footer_surface = self.font.render(footer_str, True, (120, 135, 155))
         fw, fh = footer_surface.get_size()
         text_data = pygame.image.tostring(footer_surface, "RGBA", True)
@@ -306,13 +375,19 @@ class HostEngine:
 
     def render(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glClearColor(0.08, 0.09, 0.11, 1.0)
+        glClearColor(0.06, 0.07, 0.09, 1.0)
         glLoadIdentity()
 
-        # Apply smoothed 6-DOF translation
+        # Render infinite ground grid in world space
+        self.draw_infinite_floor_grid(extent=25.0, step=1.0)
+
+        # Render 3D trajectory ribbon in world space
+        self.draw_trajectory_ribbon()
+
+        # Apply smoothed 6-DOF translation and rotation to CAD model
+        glPushMatrix()
         glTranslatef(self.curr_pos[0], self.curr_pos[1], self.curr_pos[2])
 
-        # Apply smoothed orientation from Quaternion
         rot_matrix = self.curr_rot.rotation_matrix
         gl_matrix = [
             rot_matrix[0][0], rot_matrix[1][0], rot_matrix[2][0], 0.0,
@@ -324,6 +399,7 @@ class HostEngine:
 
         # Draw CAD geometry
         self.draw_exploded_cad_model()
+        glPopMatrix()
 
         # Render 2D HUD overlays
         self.render_hud()
@@ -390,6 +466,9 @@ class HostEngine:
                             print("[KineTrak] Origin reset. Recalibrating to current position.")
                         elif event.key == pygame.K_SPACE:
                             self.trigger_action("EXPLODE")
+                        elif event.key == pygame.K_c:
+                            self.trajectory_history.clear()
+                            print("[KineTrak] Trajectory ribbon cleared.")
                         elif event.key == pygame.K_t:
                             if self.synthetic_running:
                                 self.stop_synthetic()
