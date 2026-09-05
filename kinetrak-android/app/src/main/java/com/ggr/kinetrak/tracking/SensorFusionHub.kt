@@ -20,7 +20,8 @@ class SensorFusionHub(context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     @Volatile private var lastArCoreUpdateTime: Long = 0L
-    @Volatile private var lastKnownPosition = Vec3(0.0f, 0.0f, 0.0f)
+    @Volatile private var lastValidPosition = Vec3(0.0f, 0.0f, 0.0f)
+    @Volatile private var isOpticalTrackingActive = false
     private val imuQuaternion = FloatArray(4)
 
     init {
@@ -35,11 +36,9 @@ class SensorFusionHub(context: Context) : SensorEventListener {
      * - When TRACKING: Updates currentPosition with scaled camera displayOrientedPose translation (2.5x),
      *   currentRotation with camera displayOrientedPose quaternion [qw, qx, qy, qz], marks isTrackingValid = true,
      *   and records timestamp.
-     * - When tracking is lost: Retains last known position via 300ms Zero-Order Hold. Beyond 300ms,
-     *   sets isTrackingValid = false.
+     * - When tracking is lost: Calls handleTrackingLoss() to perform a stable Zero-Order Hold.
      */
     fun onArCoreFrame(frame: Frame) {
-        val now = SystemClock.elapsedRealtime()
         val camera = frame.camera
 
         if (camera.trackingState == TrackingState.TRACKING) {
@@ -51,28 +50,27 @@ class SensorFusionHub(context: Context) : SensorEventListener {
             BridgeState.currentRotation = Quat(q[3], q[0], q[1], q[2])
             BridgeState.isTrackingValid = true
             BridgeState.isTracking.set(true)
-            lastKnownPosition = BridgeState.currentPosition
+            lastValidPosition = BridgeState.currentPosition
             lastArCoreUpdateTime = SystemClock.elapsedRealtime()
+            isOpticalTrackingActive = true
         } else {
-            val elapsed = now - lastArCoreUpdateTime
-            if (elapsed <= ZERO_ORDER_HOLD_TIMEOUT_MS && lastArCoreUpdateTime > 0L) {
-                // Zero-Order Hold within 300ms window: maintain last position and valid state
-                BridgeState.currentPosition = lastKnownPosition
-                BridgeState.isTrackingValid = true
-                BridgeState.isTracking.set(true)
-            } else {
-                // Tracking lost beyond 300ms hold window
-                BridgeState.isTrackingValid = false
-                BridgeState.isTracking.set(false)
-            }
+            isOpticalTrackingActive = false
+            handleTrackingLoss()
         }
+    }
+
+    private fun handleTrackingLoss() {
+        // Hold last known position smoothly without tripping the desktop watchdog
+        BridgeState.isTrackingValid = true
+        BridgeState.isTracking.set(true)
+        BridgeState.currentPosition = lastValidPosition
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (event == null) return
 
         if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
-            if (!BridgeState.isTrackingValid) {
+            if (!BridgeState.isTrackingValid || !isOpticalTrackingActive) {
                 // Fallback: extract IMU rotation quaternion [qw, qx, qy, qz]
                 SensorManager.getQuaternionFromVector(imuQuaternion, event.values)
                 BridgeState.currentRotation = Quat(
