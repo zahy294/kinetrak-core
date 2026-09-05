@@ -19,6 +19,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.ggr.kinetrak.storage.SessionStorageManager
+import com.ggr.kinetrak.ui.SessionHistoryBottomSheet
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
@@ -49,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvTelemetryTracking: TextView
     private lateinit var tvTelemetryPose: TextView
     private lateinit var tvTelemetryAction: TextView
+    private lateinit var btnSavedSessions: ExtendedFloatingActionButton
     private lateinit var fabExport: ExtendedFloatingActionButton
     private lateinit var fabMicToggle: FloatingActionButton
     private lateinit var btnToggleTracking: MaterialButton
@@ -101,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         tvTelemetryTracking = findViewById(R.id.tvTelemetryTracking)
         tvTelemetryPose = findViewById(R.id.tvTelemetryPose)
         tvTelemetryAction = findViewById(R.id.tvTelemetryAction)
+        btnSavedSessions = findViewById(R.id.btnSavedSessions)
         fabExport = findViewById(R.id.fabExport)
         fabMicToggle = findViewById(R.id.fabMicToggle)
         btnToggleTracking = findViewById(R.id.btnToggleTracking)
@@ -109,6 +113,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        btnSavedSessions.setOnClickListener {
+            SessionHistoryBottomSheet.newInstance()
+                .show(supportFragmentManager, SessionHistoryBottomSheet.TAG)
+        }
+
         btnToggleTracking.setOnClickListener {
             toggleTracking()
         }
@@ -311,23 +320,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Generates a dummy trajectory_waypoints.csv file and shares it via FileProvider share sheet.
+     * Generates trajectory CSV data, saves it to local on-device vault via SessionStorageManager,
+     * and triggers the FileProvider share sheet for direct PC / Office Kit handoff.
      */
     private fun exportTrajectoryCsv() {
         try {
-            val exportDir = File(cacheDir, "exports")
-            if (!exportDir.exists()) {
-                exportDir.mkdirs()
-            }
-            val csvFile = File(exportDir, "trajectory_waypoints.csv")
-            val writer = FileWriter(csvFile)
-
-            // Write CSV Header
-            writer.append("seq,timestamp_ms,tracking_state,pos_x,pos_y,pos_z,qw,qx,qy,qz,gesture_state,action\n")
-
             val baseTime = System.currentTimeMillis() - 5000
             val currentSeq = BridgeState.currentSeq.get()
             val startSeq = maxOf(1, currentSeq - 60)
+            val sampleCount = 61
+            val durationMs = 5000L
+            var resolvedAction = "NULL"
+
+            val sb = StringBuilder()
+            // Write CSV Header
+            sb.append("seq,timestamp_ms,tracking_state,pos_x,pos_y,pos_z,qw,qx,qy,qz,gesture_state,action\n")
 
             // Generate representative 6-DOF waypoints leading up to current frame
             for (i in 0..60) {
@@ -343,8 +350,9 @@ class MainActivity : AppCompatActivity() {
                 val qz = BridgeState.currentRotation[3]
                 val gState = if (i in 20..40) "RECORDING" else if (i in 41..45) "THINKING" else "IDLE"
                 val act = if (i in 46..52) "ACTION:SPAWN" else "NULL"
+                if (act != "NULL") resolvedAction = act
 
-                writer.append(
+                sb.append(
                     String.format(
                         Locale.US,
                         "%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%s,%s\n",
@@ -353,25 +361,36 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            writer.flush()
-            writer.close()
+            val csvData = sb.toString()
+            val storageManager = SessionStorageManager.getInstance(this)
+            val savedRecord = storageManager.saveSession(
+                csvData = csvData,
+                action = resolvedAction,
+                durationMs = durationMs,
+                sampleCount = sampleCount
+            )
+
+            val sessionFile = storageManager.getSessionFile(savedRecord)
 
             val contentUri = FileProvider.getUriForFile(
                 this,
                 "com.ggr.kinetrak.fileprovider",
-                csvFile
+                sessionFile
             )
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, contentUri)
-                putExtra(Intent.EXTRA_SUBJECT, "KineTrak Trajectory Waypoints")
-                putExtra(Intent.EXTRA_TEXT, "Exported KineTrak 6-DOF Trajectory CSV (${csvFile.name})")
+                putExtra(Intent.EXTRA_SUBJECT, "KineTrak Trajectory: ${savedRecord.id}")
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    "Exported KineTrak 6-DOF Trajectory CSV (${savedRecord.fileName}, ${savedRecord.sampleCount} pts, Action: ${savedRecord.detectedAction})"
+                )
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
             startActivity(Intent.createChooser(shareIntent, "Export Trajectory CSV"))
-            Log.i(TAG, "Exported trajectory CSV to URI: $contentUri")
+            Log.i(TAG, "Saved session to vault and exported trajectory CSV to URI: $contentUri")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to export trajectory CSV", e)
             Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()

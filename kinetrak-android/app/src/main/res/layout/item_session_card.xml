@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginStart="16dp"
+    android:layout_marginEnd="16dp"
+    android:layout_marginTop="6dp"
+    android:layout_marginBottom="6dp"
+    app:cardBackgroundColor="@color/card_dark_bg"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="4dp"
+    app:strokeColor="@color/card_stroke_accent"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <!-- Top Header: Session ID & Date/Time -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvSessionId"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:fontFamily="monospace"
+                android:text="session_20260905_231500"
+                android:textColor="@color/hud_text_accent"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                tools:text="session_20260905_231500" />
+
+            <TextView
+                android:id="@+id/tvSessionDate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:text="23:15:00"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp"
+                tools:text="23:15:00" />
+        </LinearLayout>
+
+        <!-- Middle Info: Duration, Waypoints, Action Badge -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- Duration Badge -->
+            <TextView
+                android:id="@+id/tvSessionDuration"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@color/badge_idle_bg"
+                android:fontFamily="monospace"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp"
+                android:text="3.2s"
+                android:textColor="@color/hud_text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                tools:text="3.2s" />
+
+            <!-- Waypoint Count Badge -->
+            <TextView
+                android:id="@+id/tvSessionSamples"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@color/badge_idle_bg"
+                android:fontFamily="monospace"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp"
+                android:text="48 pts"
+                android:textColor="@color/hud_text_secondary"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                tools:text="48 pts" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <!-- Action Badge -->
+            <TextView
+                android:id="@+id/tvSessionAction"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@color/badge_action_neon_green"
+                android:fontFamily="monospace"
+                android:paddingStart="10dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="10dp"
+                android:paddingBottom="4dp"
+                android:text="ACTION:SPAWN"
+                android:textColor="@color/black"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                tools:text="ACTION:SPAWN" />
+        </LinearLayout>
+
+        <!-- Divider -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="10dp"
+            android:background="@color/card_stroke" />
+
+        <!-- Bottom Action Row: Share Button -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical|end"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvSessionFileName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="middle"
+                android:fontFamily="monospace"
+                android:singleLine="true"
+                android:text="session_demo.csv"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp"
+                tools:text="session_20260905_231500.csv" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnShareSession"
+                android:layout_width="wrap_content"
+                android:layout_height="38dp"
+                android:letterSpacing="0.05"
+                android:text="SHARE TO PC"
+                android:textColor="@color/black"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                app:backgroundTint="@color/badge_idle_cyan"
+                app:cornerRadius="19dp"
+                app:icon="@drawable/ic_laptop"
+                app:iconGravity="textStart"
+                app:iconPadding="4dp"
+                app:iconSize="14dp"
+                app:iconTint="@color/black" />
+        </LinearLayout>
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

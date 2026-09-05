@@ -126,59 +126,88 @@
     </com.google.android.material.card.MaterialCardView>
 
     <!-- Controls Container (Pinned to bottom of the screen) -->
-    <LinearLayout
-        android:id="@+id/bottomControlsContainer"
-        android:layout_width="wrap_content"
+    <HorizontalScrollView
+        android:id="@+id/bottomControlsScroll"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="16dp"
         android:layout_marginBottom="28dp"
-        android:gravity="center_vertical|end"
-        android:orientation="horizontal"
+        android:clipToPadding="false"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:scrollbars="none"
+        android:overScrollMode="never"
         app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Tracking Toggle Button -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnToggleTracking"
-            android:layout_width="wrap_content"
-            android:layout_height="56dp"
-            android:layout_marginEnd="12dp"
-            android:text="START TRACKING"
-            android:textColor="#000000"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.05"
-            app:cornerRadius="28dp"
-            app:backgroundTint="#00FF66"
-            app:elevation="8dp" />
-
-        <!-- Mic Toggle Floating Action Button (Voice Trigger) -->
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/fabMicToggle"
+        <LinearLayout
+            android:id="@+id/bottomControlsContainer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="12dp"
-            android:contentDescription="Voice Trigger Toggle"
-            android:src="@drawable/ic_mic"
-            app:backgroundTint="@color/fab_mic_idle"
-            app:tint="@color/white"
-            app:fabSize="normal"
-            app:elevation="8dp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <!-- Export Trajectory Extended Floating Action Button -->
-        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-            android:id="@+id/fabExport"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="EXPORT TRAJECTORY"
-            android:textColor="@color/fab_export_text"
-            android:textStyle="bold"
-            android:letterSpacing="0.05"
-            android:contentDescription="Export Trajectory CSV"
-            app:icon="@drawable/ic_share"
-            app:iconTint="@color/fab_export_text"
-            app:backgroundTint="@color/fab_export_bg"
-            app:elevation="8dp" />
-    </LinearLayout>
+            <!-- Saved Sessions Vault Button -->
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/btnSavedSessions"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="SAVED SESSIONS"
+                android:textColor="@color/hud_text_accent"
+                android:textStyle="bold"
+                android:letterSpacing="0.05"
+                android:contentDescription="Saved Sessions Spatial Vault"
+                app:icon="@drawable/ic_vault"
+                app:iconTint="@color/hud_text_accent"
+                app:backgroundTint="@color/card_dark_bg"
+                app:strokeColor="@color/hud_border"
+                app:strokeWidth="1.5dp"
+                app:elevation="8dp" />
+
+            <!-- Tracking Toggle Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnToggleTracking"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginEnd="12dp"
+                android:text="START TRACKING"
+                android:textColor="#000000"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.05"
+                app:cornerRadius="28dp"
+                app:backgroundTint="#00FF66"
+                app:elevation="8dp" />
+
+            <!-- Mic Toggle Floating Action Button (Voice Trigger) -->
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fabMicToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:contentDescription="Voice Trigger Toggle"
+                android:src="@drawable/ic_mic"
+                app:backgroundTint="@color/fab_mic_idle"
+                app:tint="@color/white"
+                app:fabSize="normal"
+                app:elevation="8dp" />
+
+            <!-- Export Trajectory Extended Floating Action Button -->
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/fabExport"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="EXPORT TRAJECTORY"
+                android:textColor="@color/fab_export_text"
+                android:textStyle="bold"
+                android:letterSpacing="0.05"
+                android:contentDescription="Export Trajectory CSV"
+                app:icon="@drawable/ic_share"
+                app:iconTint="@color/fab_export_text"
+                app:backgroundTint="@color/fab_export_bg"
+                app:elevation="8dp" />
+        </LinearLayout>
+    </HorizontalScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

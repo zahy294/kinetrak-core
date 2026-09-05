@@ -26,4 +26,12 @@
     <color name="fab_export_text">#000000</color>
     <color name="fab_mic_active">#FF1744</color>
     <color name="fab_mic_idle">#263238</color>
+
+    <!-- Vault / Bottom Sheet Colors -->
+    <color name="card_dark_bg">#161B22</color>
+    <color name="card_stroke">#30363D</color>
+    <color name="card_stroke_accent">#4000E5FF</color>
+    <color name="text_muted">#8B949E</color>
+    <color name="badge_idle_bg">#21262D</color>
+    <color name="sheet_handle">#484F58</color>
 </resources>
