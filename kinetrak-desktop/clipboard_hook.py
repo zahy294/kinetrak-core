@@ -18,6 +18,7 @@ cause hard-to-diagnose crashes or corruption in the render loop. Read the
 shared state from the main thread each frame instead.
 """
 
+import json
 import time
 import threading
 import pyperclip
@@ -60,11 +61,12 @@ class ClipboardWatcher:
     def _watch_loop(self):
         while self.running:
             try:
-                content = pyperclip.paste().strip()
-
-                if content != self.last_clipboard_content and content.startswith("KT|"):
-                    self.last_clipboard_content = content
-                    self._parse_payload(content)
+                raw = pyperclip.paste()
+                if raw:
+                    content = raw.strip()
+                    if content != self.last_clipboard_content and (content.startswith("KT|") or content.startswith("{")):
+                        self.last_clipboard_content = content
+                        self._parse_payload(content)
 
             except Exception:
                 # pyperclip can occasionally throw if the OS locks the clipboard
@@ -82,64 +84,121 @@ class ClipboardWatcher:
                 self.is_stale = True
                 self.state_callback({"state": 0})
 
-    def _parse_payload(self, raw_str):
+    def _parse_payload(self, text: str):
+        if not text:
+            return
+
+        text = text.strip()
+
         # Contract: KT|SEQ|STATE|X|Y|Z|QW|QX|QY|QZ|GESTURE_STATE|ACTION
-        parts = raw_str.split("|")
+        if text.startswith("KT|"):
+            parts = text.split("|")
+            if len(parts) != 12:
+                return  # malformed frame, drop instantly
 
-        if len(parts) < 12:
-            return  # malformed frame, drop instantly
+            try:
+                seq = int(parts[1])
 
-        try:
-            seq = int(parts[1])
+                # Restart recovery: if we were stale (no valid frame for >500ms) and a
+                # new frame just arrived, treat it as a fresh session regardless of its
+                # SEQ value — an Android-side restart resets SEQ to a low number, and
+                # without this the old high last_seq/last_acted_seq would cause every
+                # subsequent frame to be silently dropped forever.
+                if self.is_stale:
+                    self.last_seq = seq - 1
+                    self.last_acted_seq = 0
+                    self.last_action = "NULL"
+                    self.is_stale = False
 
-            # Restart recovery: if we were stale (no valid frame for >500ms) and a
-            # new frame just arrived, treat it as a fresh session regardless of its
-            # SEQ value — an Android-side restart resets SEQ to a low number, and
-            # without this the old high last_seq/last_acted_seq would cause every
-            # subsequent frame to be silently dropped forever. A stale gap is a
-            # reliable signal for "this is a restart," not random jitter, since a
-            # single dropped clipboard read never produces a 500ms gap on its own.
-            if self.is_stale:
-                self.last_seq = seq - 1
-                self.last_acted_seq = 0
-                self.last_action = "NULL"
+                # Drop out-of-order or duplicate SEQ updates
+                if seq <= self.last_seq and self.last_seq != 0:
+                    return
+
+                self.last_seq = seq
+                self.last_update_time = time.time()
                 self.is_stale = False
 
-            # Drop out-of-order or duplicate SEQ updates
-            if seq <= self.last_seq and self.last_seq != 0:
+                state = int(parts[2])
+                x, y, z = float(parts[3]), float(parts[4]), float(parts[5])
+                qw, qx, qy, qz = float(parts[6]), float(parts[7]), float(parts[8]), float(parts[9])
+                gesture_state = parts[10]
+                raw_action = parts[11]
+
+                # SEQ & State based ACTION de-duplication (TDD v4.1 S10.1)
+                # Only trigger an action the FIRST time it appears in a new latch window.
+                action_to_execute = "NULL"
+                if raw_action != "NULL":
+                    if raw_action != self.last_action or (seq - self.last_acted_seq > 10):
+                        self.last_acted_seq = seq
+                        self.last_action = raw_action
+                        action_to_execute = raw_action
+                else:
+                    self.last_action = "NULL"
+
+                parsed_data = {
+                    "seq": seq,
+                    "state": state,
+                    "pos": [x, y, z],
+                    "rot": [qw, qx, qy, qz],
+                    "gesture_state": gesture_state,
+                    "action": action_to_execute,
+                }
+
+                self.state_callback(parsed_data)
+
+            except (ValueError, IndexError):
+                # Drop frame if float/int conversion fails due to corrupted clipboard text
                 return
 
-            self.last_seq = seq
-            self.last_update_time = time.time()
+        elif text.startswith("{"):
+            try:
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    return
 
-            state = int(parts[2])
-            x, y, z = float(parts[3]), float(parts[4]), float(parts[5])
-            qw, qx, qy, qz = float(parts[6]), float(parts[7]), float(parts[8]), float(parts[9])
-            gesture_state = parts[10]
-            raw_action = parts[11]
+                seq = int(data.get("seq", self.last_seq + 1))
 
-            # SEQ & State based ACTION de-duplication (TDD v4.1 S10.1)
-            # Only trigger an action the FIRST time it appears in a new latch window.
-            action_to_execute = "NULL"
-            if raw_action != "NULL":
-                if raw_action != self.last_action or (seq - self.last_acted_seq > 10):
-                    self.last_acted_seq = seq
-                    self.last_action = raw_action
-                    action_to_execute = raw_action
-            else:
-                self.last_action = "NULL"
+                # Restart recovery
+                if self.is_stale:
+                    self.last_seq = seq - 1
+                    self.last_acted_seq = 0
+                    self.last_action = "NULL"
+                    self.is_stale = False
 
-            parsed_data = {
-                "seq": seq,
-                "state": state,
-                "pos": [x, y, z],
-                "rot": [qw, qx, qy, qz],
-                "gesture_state": gesture_state,
-                "action": action_to_execute,
-            }
+                # Drop out-of-order or duplicate SEQ updates
+                if seq <= self.last_seq and self.last_seq != 0:
+                    return
 
-            self.state_callback(parsed_data)
+                self.last_seq = seq
+                self.last_update_time = time.time()
+                self.is_stale = False
 
-        except ValueError:
-            # Drop frame if float/int conversion fails due to corrupted clipboard text
-            return
+                state = int(data.get("state", 1))
+                pos = data.get("pos", [0.0, 0.0, 0.0])
+                rot = data.get("rot", [1.0, 0.0, 0.0, 0.0])
+                gesture_state = str(data.get("gesture_state", "NULL"))
+                raw_action = str(data.get("action", "NULL"))
+
+                # SEQ & State based ACTION de-duplication
+                action_to_execute = "NULL"
+                if raw_action != "NULL":
+                    if raw_action != self.last_action or (seq - self.last_acted_seq > 10):
+                        self.last_acted_seq = seq
+                        self.last_action = raw_action
+                        action_to_execute = raw_action
+                else:
+                    self.last_action = "NULL"
+
+                parsed_data = {
+                    "seq": seq,
+                    "state": state,
+                    "pos": [float(pos[0]), float(pos[1]), float(pos[2])] if isinstance(pos, (list, tuple)) and len(pos) == 3 else [0.0, 0.0, 0.0],
+                    "rot": [float(rot[0]), float(rot[1]), float(rot[2]), float(rot[3])] if isinstance(rot, (list, tuple)) and len(rot) == 4 else [1.0, 0.0, 0.0, 0.0],
+                    "gesture_state": gesture_state,
+                    "action": action_to_execute,
+                }
+
+                self.state_callback(parsed_data)
+
+            except (json.JSONDecodeError, ValueError, TypeError, IndexError):
+                return
