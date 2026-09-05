@@ -46,5 +46,11 @@ time.sleep(0.1)
 assert received[-1] == (1, 'RESET'), "Failed restart recovery"
 print("  ✅ Restart recovery verified!")
 
+print("\n--- 5. Legacy JSON Fallback ---")
+pyperclip.copy('{"seq": 200, "state": 1, "pos": [1.0, 2.0, 3.0], "rot": [1.0, 0.0, 0.0, 0.0], "gesture_state": "GESTURE", "action": "ACTION:SPAWN"}')
+time.sleep(0.1)
+assert received[-1] == (200, 'ACTION:SPAWN'), f"Failed JSON fallback: {received}"
+print("  ✅ Legacy JSON fallback verified!")
+
 watcher.stop()
 print("\n🎉 ALL TESTS PASSED: Clipboard contract verified!\n")

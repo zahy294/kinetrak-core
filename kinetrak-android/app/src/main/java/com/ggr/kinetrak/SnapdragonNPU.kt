@@ -47,17 +47,16 @@ class SnapdragonNPU(private val application: Application) {
     }
 
     /**
-     * Runs forward-propagation on rolling 45-frame buffer (45 frames x 6 features = 270 floats)
+     * Runs forward-propagation on rolling 45-feature buffer matching model shape [1, 45]
      */
-    fun classifyGesture(buffer270Floats: FloatArray): Int {
+    fun classifyGesture(inputBuffer: FloatArray): Int {
         val nn = neuralNetwork ?: return -1
 
         return try {
-            // 1. Get the shape the model expects
-            val shape = nn.inputTensorsShapes[inputTensorName] ?: intArrayOf(1, 45, 6)
+            // 1. Get the shape the model expects (shape [1, 45])
+            val shape = nn.inputTensorsShapes[inputTensorName] ?: intArrayOf(1, 45)
 
-            // Calculate total floats needed (e.g. 1 * 45 * 6 = 270)
-            val totalFloatsNeeded = shape.reduce { acc, dim -> acc * dim }
+            val totalFloatsNeeded = 45
 
             // Log the shape ONCE so we can see it in Logcat
             if (!hasLoggedShape) {
@@ -69,10 +68,12 @@ class SnapdragonNPU(private val application: Application) {
             val inputTensor = nn.createFloatTensor(*shape)
 
             // 3. Slice or resize buffer so it NEVER overflows the tensor
-            val safeBuffer = if (buffer270Floats.size >= totalFloatsNeeded) {
-                buffer270Floats.copyOf(totalFloatsNeeded)
+            val safeBuffer = if (inputBuffer.size >= 45) {
+                inputBuffer.copyOf(45)
             } else {
-                FloatArray(totalFloatsNeeded) { i -> if (i < buffer270Floats.size) buffer270Floats[i] else 0f }
+                val padded = FloatArray(45)
+                System.arraycopy(inputBuffer, 0, padded, 0, inputBuffer.size)
+                padded
             }
 
             // 4. Write to tensor safely
