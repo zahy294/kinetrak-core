@@ -1,5 +1,6 @@
-package com.ggr.kinetrak
 
+package com.ggr.kinetrak
+import kotlinx.coroutines.*
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -21,8 +22,13 @@ import android.util.Log
 import kotlinx.coroutines.*
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
 
 class ClipboardBridgeService : Service(), SensorEventListener {
+    private val clipboardManager by lazy {
+        getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    }
+    private var lastSendTime = 0L
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private val seqCounter = AtomicInteger(1)
     private lateinit var clipboard: ClipboardManager
@@ -226,15 +232,17 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                 Log.i("KineTrak", "Emitting: $payload")
 
                 withContext(Dispatchers.Main) {
-                    val clip = ClipData.newPlainText("kt_stream", payload).apply {
-                        description.extras = PersistableBundle().apply {
-                            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                    val now = System.currentTimeMillis()
+                    if (now - lastSendTime >= 33) {
+                        lastSendTime = now
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val clip = ClipData.newPlainText("KT", payload)
+                            clipboardManager.setPrimaryClip(clip)
                         }
                     }
-                    clipboard.setPrimaryClip(clip)
                 }
 
-                delay(66) // 15Hz decimation rate
+                delay(33) // ~30Hz emission rate
             }
         }
     }

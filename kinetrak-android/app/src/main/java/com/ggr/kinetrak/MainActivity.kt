@@ -7,11 +7,13 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
+import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.FatalException
@@ -30,6 +32,11 @@ class MainActivity : AppCompatActivity() {
     private var arSession: Session? = null
     private var isArTrackingActive = false
     private val volumeKeyLock = AtomicBoolean(false)
+
+    // State variables for relative 6DoF spatial translation & touch recording control
+    @Volatile private var isRecording: Boolean = false
+    @Volatile private var startPose: Pose? = null
+    @Volatile private var lastCameraPose: Pose? = null
 
     companion object {
         private const val TAG = "MainActivity"
@@ -123,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         BridgeState.posX = 0.0f
         BridgeState.posY = 0.0f
         BridgeState.posZ = 0.0f
+        BridgeState.currentState.set("IDLE")
     }
 
     private fun setupArSession() {
@@ -178,12 +186,35 @@ class MainActivity : AppCompatActivity() {
                         val frame = session.update()
                         val camera = frame.camera
                         if (camera.trackingState == TrackingState.TRACKING) {
-                            val translation = camera.pose.translation
-                            BridgeState.posX = translation[0]
-                            BridgeState.posY = translation[1]
-                            BridgeState.posZ = translation[2]
+                            val currentPose = camera.pose
+                            lastCameraPose = currentPose
+
+                            if (isRecording) {
+                                if (startPose == null) {
+                                    startPose = currentPose
+                                }
+                                val start = startPose
+                                if (start != null) {
+                                    val relX = currentPose.tx() - start.tx()
+                                    val relY = currentPose.ty() - start.ty()
+                                    val relZ = currentPose.tz() - start.tz()
+                                    BridgeState.posX = relX
+                                    BridgeState.posY = relY
+                                    BridgeState.posZ = relZ
+                                    BridgeState.currentState.set("RECORDING")
+                                }
+                            } else {
+                                BridgeState.posX = 0.0f
+                                BridgeState.posY = 0.0f
+                                BridgeState.posZ = 0.0f
+                                BridgeState.currentState.set("IDLE")
+                            }
                             BridgeState.isTracking.set(true)
                         } else {
+                            BridgeState.posX = 0.0f
+                            BridgeState.posY = 0.0f
+                            BridgeState.posZ = 0.0f
+                            BridgeState.currentState.set("IDLE")
                             BridgeState.isTracking.set(true)
                         }
                     } catch (e: Exception) {
@@ -202,6 +233,40 @@ class MainActivity : AppCompatActivity() {
         } else {
             startService(serviceIntent)
         }
+    }
+
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        when (event?.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                isRecording = true
+                startPose = lastCameraPose
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isRecording = false
+                startPose = null
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event == null || event.repeatCount == 0) {
+                isRecording = true
+                startPose = lastCameraPose
+            }
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            isRecording = false
+            startPose = null
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     override fun onResume() {
@@ -238,26 +303,5 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "Error closing ARCore session", e)
         }
         super.onDestroy()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            if (event == null || event.repeatCount == 0) {
-                if (volumeKeyLock.compareAndSet(false, true)) {
-                    try {
-                        val current = BridgeState.currentState.get()
-                        if (current == "RECORDING") {
-                            BridgeState.currentState.set("IDLE")
-                        } else if (current == "IDLE" || current == "NULL") {
-                            BridgeState.currentState.set("RECORDING")
-                        }
-                    } finally {
-                        volumeKeyLock.set(false)
-                    }
-                }
-            }
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
     }
 }
