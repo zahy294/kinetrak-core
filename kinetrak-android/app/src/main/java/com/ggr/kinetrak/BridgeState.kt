@@ -52,7 +52,9 @@ object BridgeState {
         }
 
     // ── Tracking validity ──────────────────────────────────────────────────────
-    @Volatile var isTrackingValid: Boolean
+    // NOTE: Not @Volatile — this is a computed property (no backing field).
+    // Thread-safety is provided by the underlying AtomicBoolean isTracking.
+    var isTrackingValid: Boolean
         get() = isTracking.get()
         set(value) { isTracking.set(value) }
 
