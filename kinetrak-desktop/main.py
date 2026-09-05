@@ -866,8 +866,8 @@ def main():
                     is_tracking=is_tracking
                 )
 
-            # Update interpolator smoothly towards target via 60FPS step
-            smoothed_pos, smoothed_rot = interpolator.step(alpha=0.25)
+            # Update interpolator smoothly towards target via 60FPS step (tuned: pos=0.40, rot=0.45)
+            smoothed_pos, smoothed_rot = interpolator.step(pos_alpha=0.40, rot_alpha=0.45)
 
             # Apply Origin Recalibration Offset
             calibrated_pos = [

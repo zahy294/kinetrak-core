@@ -1,5 +1,5 @@
 package com.ggr.kinetrak
-
+ 
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,38 +10,17 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PersistableBundle
 import android.util.Log
 import kotlinx.coroutines.*
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
-class ClipboardBridgeService : Service(), SensorEventListener {
+class ClipboardBridgeService : Service() {
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private val seqCounter = AtomicInteger(1)
     private lateinit var clipboard: ClipboardManager
-    private lateinit var sensorManager: SensorManager
-    private lateinit var snapdragonNPU: SnapdragonNPU
-
-    // Live orientation quaternion [qw, qx, qy, qz]
-    @Volatile private var qw = 1.0f
-    @Volatile private var qx = 0.0f
-    @Volatile private var qy = 0.0f
-    @Volatile private var qz = 0.0f
-
-    // Live IMU sensor values (3-axis accel + 3-axis gyro)
-    @Volatile private var ax = 0.0f
-    @Volatile private var ay = 0.0f
-    @Volatile private var az = 0.0f
-    @Volatile private var gx = 0.0f
-    @Volatile private var gy = 0.0f
-    @Volatile private var gz = 0.0f
 
     companion object {
         private const val TAG = "ClipboardBridgeService"
@@ -50,67 +29,10 @@ class ClipboardBridgeService : Service(), SensorEventListener {
     override fun onCreate() {
         super.onCreate()
         clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-
-        // Instantiate Snapdragon NPU and load quantized model
-        snapdragonNPU = SnapdragonNPU(application)
-        scope.launch(Dispatchers.Default) {
-            val initialized = snapdragonNPU.initModelFromAssets("gesture_model_quantized.dlc")
-            if (initialized) {
-                Log.i(TAG, "Snapdragon NPU loaded gesture_model_quantized.dlc successfully")
-            } else {
-                Log.e(TAG, "Failed to load gesture_model_quantized.dlc on Snapdragon NPU")
-            }
-        }
-
-        // Register hardware IMU rotation fusion
-        val rotSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        rotSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-
-        // Register 3-axis accelerometer
-        val accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        accelSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-
-        // Register 3-axis gyroscope
-        val gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        gyroSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
 
         startForegroundServiceNotification()
         startEmissionLoop()
     }
-
-    override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null) return
-        when (event.sensor.type) {
-            Sensor.TYPE_ROTATION_VECTOR -> {
-                val q = FloatArray(4)
-                SensorManager.getQuaternionFromVector(q, event.values)
-                // Android returns [qw, qx, qy, qz]
-                qw = q[0]
-                qx = q[1]
-                qy = q[2]
-                qz = q[3]
-            }
-            Sensor.TYPE_ACCELEROMETER -> {
-                ax = event.values[0]
-                ay = event.values[1]
-                az = event.values[2]
-            }
-            Sensor.TYPE_GYROSCOPE -> {
-                gx = event.values[0]
-                gy = event.values[1]
-                gz = event.values[2]
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     private fun startForegroundServiceNotification() {
         val channelId = "kinetrak_stream_v2"
@@ -141,52 +63,8 @@ class ClipboardBridgeService : Service(), SensorEventListener {
             var latchTicksRemaining = 0
             var activeLatchedAction = "NULL"
 
-            // 45-frame motion buffer matching gesture_model_quantized.dlc tensor dimension (shape [1, 45])
-            val motionBuffer = FloatArray(45)
-            var bufferedFrames = 0
-
             while (isActive) {
                 val seq = seqCounter.getAndIncrement()
-                val currentState = BridgeState.currentState.get()
-
-                // State Machine: buffer IMU frames during RECORDING
-                if (currentState == "RECORDING") {
-                    val accelMagnitude = Math.sqrt((ax * ax + ay * ay + az * az).toDouble()).toFloat()
-                    motionBuffer[bufferedFrames] = accelMagnitude
-                    bufferedFrames++
-
-                    if (bufferedFrames >= 45) {
-                        // Switch to THINKING and classify gesture
-                        BridgeState.currentState.set("THINKING")
-                        val bufferSnapshot = motionBuffer.copyOf()
-                        bufferedFrames = 0
-
-                        scope.launch(Dispatchers.Default) {
-                            if (BridgeState.isProcessing.compareAndSet(false, true)) {
-                                try {
-                                    val classIdx = snapdragonNPU.classifyGesture(bufferSnapshot)
-                                    val resolvedAction = when (classIdx) {
-                                        0 -> "ACTION:SPAWN"
-                                        1 -> "ACTION:SELECT"
-                                        2 -> "ACTION:DELETE"
-                                        3 -> "ACTION:RESET"
-                                        else -> "NULL"
-                                    }
-                                    if (resolvedAction != "NULL") {
-                                        BridgeState.pendingAction.set(resolvedAction)
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Gesture classification failed", e)
-                                } finally {
-                                    BridgeState.currentState.set("IDLE")
-                                    BridgeState.isProcessing.set(false)
-                                }
-                            }
-                        }
-                    }
-                } else if (currentState != "THINKING") {
-                    bufferedFrames = 0
-                }
 
                 // Check for newly resolved actions and update 7-tick latch window (~500ms at 15Hz)
                 val newPendingAction = BridgeState.pendingAction.getAndSet("NULL")
@@ -195,33 +73,23 @@ class ClipboardBridgeService : Service(), SensorEventListener {
                     latchTicksRemaining = 7
                 }
 
-                val actionToken = if (latchTicksRemaining > 0) {
+                val activeAction = if (latchTicksRemaining > 0) {
                     latchTicksRemaining--
-                    activeLatchedAction
+                    val action = activeLatchedAction
+                    if (latchTicksRemaining == 0) {
+                        activeLatchedAction = "NULL"
+                    }
+                    action
                 } else {
                     activeLatchedAction = "NULL"
                     "NULL"
                 }
 
-                val gestureState = BridgeState.currentState.get()
-                val trackingState = if (BridgeState.isTracking.get()) 1 else 0
+                val pos = BridgeState.currentPosition
+                val rot = BridgeState.currentRotation
+                val state = if (BridgeState.isTrackingValid) 1 else 0
 
-                // Stream real translation and quaternion orientation from ARCore and phone hardware
-                val payload = String.format(
-                    Locale.US,
-                    "KT|%d|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s|%s",
-                    seq,
-                    trackingState,
-                    BridgeState.posX,
-                    BridgeState.posY,
-                    BridgeState.posZ,
-                    qw,
-                    qx,
-                    qy,
-                    qz,
-                    gestureState,
-                    actionToken
-                )
+                val payload = "KT|$seq|$state|${pos.x}|${pos.y}|${pos.z}|${rot.w}|${rot.x}|${rot.y}|${rot.z}|${BridgeState.gestureState}|$activeAction"
 
                 Log.i("KineTrak", "Emitting: $payload")
 
@@ -240,8 +108,6 @@ class ClipboardBridgeService : Service(), SensorEventListener {
     }
 
     override fun onDestroy() {
-        sensorManager.unregisterListener(this)
-        snapdragonNPU.release()
         scope.cancel()
         super.onDestroy()
     }

@@ -160,18 +160,45 @@ class SpatialInterpolator:
                 self.target_pos = list(self.last_valid_pos)
                 self.target_rot = list(self.last_valid_rot)
 
-    def step(self, alpha: float = 0.25) -> Tuple[List[float], List[float]]:
+    @property
+    def curr_pos(self) -> List[float]:
+        """Current position [X, Y, Z] alias."""
+        return self.current_pos
+
+    @curr_pos.setter
+    def curr_pos(self, val: List[float]) -> None:
+        self.current_pos = val
+
+    @property
+    def curr_rot(self) -> List[float]:
+        """Current rotation [QW, QX, QY, QZ] alias."""
+        return self.current_rot
+
+    @curr_rot.setter
+    def curr_rot(self, val: List[float]) -> None:
+        self.current_rot = val
+
+    def step(
+        self,
+        pos_alpha: float = 0.40,
+        rot_alpha: float = 0.45,
+        alpha: Optional[float] = None
+    ) -> Tuple[List[float], List[float]]:
         """
         Calculates and returns the next 60FPS frame coordinates.
         Interpolates current pose toward target pose:
-        - Position: 3D vector LERP
-        - Rotation: pyquaternion SLERP
+        - Position: 3D vector LERP with pos_alpha (default 0.40)
+        - Rotation: pyquaternion SLERP with rot_alpha (default 0.45)
         
-        :param alpha: Exponential smoothing factor (default 0.25 for 60FPS output).
+        :param pos_alpha: Exponential smoothing factor for position (default 0.40).
+        :param rot_alpha: Exponential smoothing factor for rotation (default 0.45).
+        :param alpha: Backward-compatible unified alpha override if provided.
         :return: Tuple of ([X, Y, Z], [QW, QX, QY, QZ])
         """
-        self.current_pos = lerp_vec3(self.current_pos, self.target_pos, alpha)
-        self.current_rot = slerp_quat(self.current_rot, self.target_rot, alpha)
+        p_alpha = alpha if alpha is not None else pos_alpha
+        r_alpha = alpha if alpha is not None else rot_alpha
+        self.current_pos = lerp_vec3(self.current_pos, self.target_pos, p_alpha)
+        self.current_rot = slerp_quat(self.current_rot, self.target_rot, r_alpha)
         return list(self.current_pos), list(self.current_rot)
 
     @property
