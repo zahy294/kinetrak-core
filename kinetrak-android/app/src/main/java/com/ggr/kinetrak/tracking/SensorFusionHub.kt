@@ -52,19 +52,28 @@ class SensorFusionHub(context: Context) : SensorEventListener {
             val qz = pose.qz()
 
             lastKnownPosition = floatArrayOf(x, y, z)
+            BridgeState.posX = x
+            BridgeState.posY = y
+            BridgeState.posZ = z
             BridgeState.currentPosition = lastKnownPosition
             BridgeState.currentRotation = floatArrayOf(qw, qx, qy, qz)
             BridgeState.isTrackingValid = true
+            BridgeState.isTracking.set(true)
             lastArCoreUpdateTime = now
         } else {
             val elapsed = now - lastArCoreUpdateTime
             if (elapsed <= ZERO_ORDER_HOLD_TIMEOUT_MS && lastArCoreUpdateTime > 0L) {
                 // Zero-Order Hold within 300ms window: maintain last position and valid state
+                BridgeState.posX = lastKnownPosition[0]
+                BridgeState.posY = lastKnownPosition[1]
+                BridgeState.posZ = lastKnownPosition[2]
                 BridgeState.currentPosition = lastKnownPosition
                 BridgeState.isTrackingValid = true
+                BridgeState.isTracking.set(true)
             } else {
                 // Tracking lost beyond 300ms hold window
                 BridgeState.isTrackingValid = false
+                BridgeState.isTracking.set(false)
             }
         }
     }

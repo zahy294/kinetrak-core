@@ -1,8 +1,15 @@
 package com.ggr.kinetrak
 
+import com.ggr.kinetrak.tracking.SensorFusionHub
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLSurface
+import android.opengl.GLES20
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -30,6 +37,12 @@ class MainActivity : AppCompatActivity() {
     private var arSession: Session? = null
     private var isArTrackingActive = false
     private val volumeKeyLock = AtomicBoolean(false)
+    private lateinit var sensorFusionHub: SensorFusionHub
+
+    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var cameraTextureId: Int = -1
 
     companion object {
         private const val TAG = "MainActivity"
@@ -38,6 +51,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sensorFusionHub = SensorFusionHub(this)
         checkAndRequestPermissions()
     }
 
@@ -100,21 +114,9 @@ class MainActivity : AppCompatActivity() {
     private fun checkArCoreAvailability(): Boolean {
         return try {
             val availability = ArCoreApk.getInstance().checkAvailability(this)
-            if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
-                Log.w(TAG, "ARCore not supported or unavailable on this device. Activating IMU-only fallback.")
-                false
-            } else if (availability.isSupported) {
-                true
-            } else {
-                Log.w(TAG, "ARCore not supported or unavailable on this device. Activating IMU-only fallback.")
-                false
-            }
-        } catch (e: FatalException) {
-            Log.w(TAG, "ARCore not supported or unavailable on this device. Activating IMU-only fallback.", e)
-            false
+            availability != ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
         } catch (e: Exception) {
-            Log.w(TAG, "ARCore not supported or unavailable on this device. Activating IMU-only fallback.", e)
-            false
+            true
         }
     }
 
@@ -123,6 +125,74 @@ class MainActivity : AppCompatActivity() {
         BridgeState.posX = 0.0f
         BridgeState.posY = 0.0f
         BridgeState.posZ = 0.0f
+    }
+
+    private fun initOffscreenGl(): Int {
+        return try {
+            eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            if (eglDisplay == EGL14.EGL_NO_DISPLAY) return -1
+            val version = IntArray(2)
+            if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) return -1
+
+            val attribList = intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
+                EGL14.EGL_NONE
+            )
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, 1, numConfigs, 0)
+            if (numConfigs[0] == 0 || configs[0] == null) return -1
+
+            val contextAttribs = intArrayOf(
+                EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+                EGL14.EGL_NONE
+            )
+            eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+            if (eglContext == EGL14.EGL_NO_CONTEXT) return -1
+
+            val pbufferAttribs = intArrayOf(
+                EGL14.EGL_WIDTH, 1,
+                EGL14.EGL_HEIGHT, 1,
+                EGL14.EGL_NONE
+            )
+            eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, configs[0], pbufferAttribs, 0)
+            if (eglSurface == EGL14.EGL_NO_SURFACE) return -1
+
+            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            cameraTextureId = textures[0]
+            Log.i(TAG, "Generated offscreen camera texture ID: $cameraTextureId")
+            cameraTextureId
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to initialize offscreen EGL context for ARCore: ${e.message}", e)
+            -1
+        }
+    }
+
+    private fun releaseOffscreenGl() {
+        try {
+            if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+                if (eglSurface != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                    eglSurface = EGL14.EGL_NO_SURFACE
+                }
+                if (eglContext != EGL14.EGL_NO_CONTEXT) {
+                    EGL14.eglDestroyContext(eglDisplay, eglContext)
+                    eglContext = EGL14.EGL_NO_CONTEXT
+                }
+                EGL14.eglTerminate(eglDisplay)
+                eglDisplay = EGL14.EGL_NO_DISPLAY
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing offscreen EGL: ${e.message}")
+        }
     }
 
     private fun setupArSession() {
@@ -170,28 +240,30 @@ class MainActivity : AppCompatActivity() {
         if (isArTrackingActive) return
         isArTrackingActive = true
 
-        arScope.launch {
+        arScope.launch(Dispatchers.Default) {
+            val textureId = initOffscreenGl()
+            if (textureId > 0 && arSession != null) {
+                try {
+                    arSession?.setCameraTextureName(textureId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to bind camera texture name: ${e.message}")
+                }
+            }
+
             while (isActive && isArTrackingActive) {
                 val session = arSession
                 if (session != null) {
                     try {
                         val frame = session.update()
-                        val camera = frame.camera
-                        if (camera.trackingState == TrackingState.TRACKING) {
-                            val translation = camera.pose.translation
-                            BridgeState.posX = translation[0]
-                            BridgeState.posY = translation[1]
-                            BridgeState.posZ = translation[2]
-                            BridgeState.isTracking.set(true)
-                        } else {
-                            BridgeState.isTracking.set(true)
-                        }
+                        sensorFusionHub.onArCoreFrame(frame)
                     } catch (e: Exception) {
                         // Frame update may fail when paused or camera unavailable
                     }
                 }
                 delay(33) // ~30Hz ARCore translation sampling
             }
+
+            releaseOffscreenGl()
         }
     }
 
@@ -231,6 +303,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         isArTrackingActive = false
         arScope.cancel()
+        releaseOffscreenGl()
+        if (::sensorFusionHub.isInitialized) {
+            sensorFusionHub.release()
+        }
         try {
             arSession?.close()
             arSession = null
