@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Android / Gradle
+.gradle/
+build/
+app/build/
+*.iml
+.idea/
+local.properties
+.cxx/
+captures/
+*.apk
+*.ap_
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+
+# Raw Vendor SDK directory
+Qualcomm_SNPE/
