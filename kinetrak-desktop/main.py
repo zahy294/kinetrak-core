@@ -7,6 +7,7 @@ Features:
 - Thread-safe clipboard telemetry ingestion via ClipboardWatcher bridge.
 - Frame-rate-independent 6-DOF pose interpolation (SpatialInterpolator) at 60 FPS.
 - Infinite 3D floor grid along X-Z plane.
+- 3D Motion Trajectory Ribbon recording and GL_LINE_STRIP alpha-fading rendering.
 - Reactive central target object responding to ACTION:SPAWN, SELECT, DELETE, RESET, EXPLODE.
 - 3D spatial phone cursor with local coordinate frame axes (RGB) and floor shadow.
 - 2D HUD overlay (glOrtho) rendering SEQ, FPS, X/Y/Z coords, quaternion orientation,
@@ -20,6 +21,7 @@ import time
 import math
 import argparse
 import threading
+from collections import deque
 import numpy as np
 
 # Ensure UTF-8 output on Windows
@@ -212,11 +214,10 @@ class SyntheticGenerator:
 class ReactiveTargetObject:
     """
     Central 3D target object reacting to KineTrak action triggers:
-    - SPAWN: Scale pop-in / pulsation
+    - SPAWN / EXPLODE: Scale pop-in / outward geometric expansion
     - SELECT: Continuous or spin burst + highlight
     - DELETE: Visibility toggle / dissolve
     - RESET: Restores initial state
-    - EXPLODE: Outward geometric expansion
     """
 
     def __init__(self):
@@ -230,24 +231,33 @@ class ReactiveTargetObject:
         self.highlight_timer = 0.0
         self.explosion_factor = 0.0
 
-    def trigger_action(self, action_name):
-        act = action_name.upper()
-        if "SPAWN" in act:
+    def trigger_action(self, action_name: str):
+        if not action_name or action_name == "NULL":
+            return
+        act = action_name.strip().upper()
+        if act.startswith("ACTION:"):
+            act = act[7:]
+
+        if act == "SPAWN":
             self.visible = True
             self.scale = 0.2
             self.target_scale = 1.3
             self.highlight_timer = 1.0
-            print("[TargetObject] Action SPAWN: scaling object")
-        elif "SELECT" in act:
+            print(f"[TargetObject] Action SPAWN: scaling object")
+        elif act == "EXPLODE":
+            self.explosion_factor = 1.5
+            self.highlight_timer = 1.2
+            print(f"[TargetObject] Action EXPLODE: triggered")
+        elif act == "SELECT":
             self.selected = not self.selected
             self.spin_velocity = 720.0  # Fast spin burst
             self.highlight_timer = 1.5
             print(f"[TargetObject] Action SELECT: selected={self.selected}")
-        elif "DELETE" in act:
+        elif act == "DELETE":
             self.visible = not self.visible
             self.highlight_timer = 1.0
             print(f"[TargetObject] Action DELETE: visible={self.visible}")
-        elif "RESET" in act:
+        elif act == "RESET":
             self.scale = 1.0
             self.target_scale = 1.0
             self.rotation_y = 0.0
@@ -256,11 +266,7 @@ class ReactiveTargetObject:
             self.selected = False
             self.highlight_timer = 1.0
             self.explosion_factor = 0.0
-            print("[TargetObject] Action RESET: restored defaults")
-        elif "EXPLODE" in act:
-            self.explosion_factor = 1.5
-            self.highlight_timer = 1.2
-            print("[TargetObject] Action EXPLODE: triggered")
+            print(f"[TargetObject] Action RESET: restored defaults")
 
     def update(self, dt):
         # Smooth scale return
@@ -268,77 +274,93 @@ class ReactiveTargetObject:
         if abs(self.target_scale - 1.0) > 0.01:
             self.target_scale += (1.0 - self.target_scale) * min(1.0, 4.0 * dt)
 
-        # Decay spin velocity or keep spinning if selected
-        if self.selected:
-            self.rotation_y = (self.rotation_y + 90.0 * dt) % 360.0
+        # Decay spin velocity and explosion factor
         if self.spin_velocity > 0.0:
-            self.rotation_y = (self.rotation_y + self.spin_velocity * dt) % 360.0
-            self.spin_velocity = max(0.0, self.spin_velocity - 400.0 * dt)
+            self.rotation_y += self.spin_velocity * dt
+            self.spin_velocity = max(0.0, self.spin_velocity - 600.0 * dt)
+        else:
+            self.rotation_y += 15.0 * dt  # Gentle idle ambient rotation
+
+        if self.explosion_factor > 0.0:
+            self.explosion_factor = max(0.0, self.explosion_factor - 2.0 * dt)
 
         if self.highlight_timer > 0.0:
             self.highlight_timer = max(0.0, self.highlight_timer - dt)
-
-        if self.explosion_factor > 0.0:
-            self.explosion_factor = max(0.0, self.explosion_factor - 1.5 * dt)
 
     def draw(self):
         if not self.visible:
             return
 
         glPushMatrix()
-        glTranslatef(self.base_pos[0], self.base_pos[1], self.base_pos[2])
+        glTranslatef(*self.base_pos)
         glRotatef(self.rotation_y, 0.0, 1.0, 0.0)
+        s = self.scale * (1.0 + 0.3 * self.explosion_factor)
+        glScalef(s, s, s)
 
-        eff_scale = self.scale * (1.0 + 0.5 * self.explosion_factor)
-        glScalef(eff_scale, eff_scale, eff_scale)
+        half = 0.3
+        exp_offset = 0.15 * self.explosion_factor
 
-        # Cube half-extent
-        s = 0.4
-
-        # Face color with dynamic highlight
-        if self.selected:
-            face_col = (0.95, 0.70, 0.15, 0.85)  # Gold when selected
-        elif self.highlight_timer > 0.0:
-            t = self.highlight_timer / 1.5
-            face_col = (0.2 + 0.7 * t, 0.8, 0.5 + 0.5 * t, 0.9)
-        else:
-            face_col = (0.22, 0.45, 0.75, 0.85)  # Tech cyan-blue
-
-        wire_col = (1.0, 1.0, 1.0, 0.95) if self.selected else (0.8, 0.9, 1.0, 0.7)
-
-        # Draw solid faces with subtle lighting colors
+        # Solid Mesh Faces
         glBegin(GL_QUADS)
-        # Front (+Z)
-        glColor4f(face_col[0] * 1.0, face_col[1] * 1.0, face_col[2] * 1.0, face_col[3])
-        glVertex3f(-s, -s,  s); glVertex3f( s, -s,  s); glVertex3f( s,  s,  s); glVertex3f(-s,  s,  s)
-        # Back (-Z)
-        glColor4f(face_col[0] * 0.7, face_col[1] * 0.7, face_col[2] * 0.7, face_col[3])
-        glVertex3f(-s, -s, -s); glVertex3f(-s,  s, -s); glVertex3f( s,  s, -s); glVertex3f( s, -s, -s)
-        # Top (+Y)
-        glColor4f(face_col[0] * 1.1, face_col[1] * 1.1, face_col[2] * 1.1, face_col[3])
-        glVertex3f(-s,  s, -s); glVertex3f(-s,  s,  s); glVertex3f( s,  s,  s); glVertex3f( s,  s, -s)
-        # Bottom (-Y)
-        glColor4f(face_col[0] * 0.5, face_col[1] * 0.5, face_col[2] * 0.5, face_col[3])
-        glVertex3f(-s, -s, -s); glVertex3f( s, -s, -s); glVertex3f( s, -s,  s); glVertex3f(-s, -s,  s)
-        # Right (+X)
-        glColor4f(face_col[0] * 0.9, face_col[1] * 0.9, face_col[2] * 0.9, face_col[3])
-        glVertex3f( s, -s, -s); glVertex3f( s,  s, -s); glVertex3f( s,  s,  s); glVertex3f( s, -s,  s)
-        # Left (-X)
-        glColor4f(face_col[0] * 0.8, face_col[1] * 0.8, face_col[2] * 0.8, face_col[3])
-        glVertex3f(-s, -s, -s); glVertex3f(-s, -s,  s); glVertex3f(-s,  s,  s); glVertex3f(-s,  s, -s)
+        # Front face (+Z)
+        if self.selected:
+            glColor4f(1.0, 0.84, 0.0, 0.95)  # Gold highlight if selected
+        else:
+            glColor4f(0.0, 0.75, 0.95, 0.90)  # Cyan core
+        glVertex3f(-half, -half,  half + exp_offset)
+        glVertex3f( half, -half,  half + exp_offset)
+        glVertex3f( half,  half,  half + exp_offset)
+        glVertex3f(-half,  half,  half + exp_offset)
+
+        # Back face (-Z)
+        glColor4f(0.0, 0.50, 0.80, 0.90)
+        glVertex3f(-half, -half, -half - exp_offset)
+        glVertex3f(-half,  half, -half - exp_offset)
+        glVertex3f( half,  half, -half - exp_offset)
+        glVertex3f( half, -half, -half - exp_offset)
+
+        # Top face (+Y)
+        glColor4f(0.20, 0.85, 1.00, 0.90)
+        glVertex3f(-half,  half + exp_offset, -half)
+        glVertex3f(-half,  half + exp_offset,  half)
+        glVertex3f( half,  half + exp_offset,  half)
+        glVertex3f( half,  half + exp_offset, -half)
+
+        # Bottom face (-Y)
+        glColor4f(0.0, 0.35, 0.65, 0.90)
+        glVertex3f(-half, -half - exp_offset, -half)
+        glVertex3f( half, -half - exp_offset, -half)
+        glVertex3f( half, -half - exp_offset,  half)
+        glVertex3f(-half, -half - exp_offset,  half)
+
+        # Right face (+X)
+        glColor4f(0.10, 0.65, 0.90, 0.90)
+        glVertex3f( half + exp_offset, -half, -half)
+        glVertex3f( half + exp_offset,  half, -half)
+        glVertex3f( half + exp_offset,  half,  half)
+        glVertex3f( half + exp_offset, -half,  half)
+
+        # Left face (-X)
+        glColor4f(0.05, 0.45, 0.75, 0.90)
+        glVertex3f(-half - exp_offset, -half, -half)
+        glVertex3f(-half - exp_offset, -half,  half)
+        glVertex3f(-half - exp_offset,  half,  half)
+        glVertex3f(-half - exp_offset,  half, -half)
         glEnd()
 
-        # Wireframe edge accents
-        glLineWidth(2.0)
-        glColor4fv(wire_col)
+        # Glowing Wireframe Bounding Box Outline
+        glLineWidth(2.5 if self.selected else 1.5)
+        if self.highlight_timer > 0.0:
+            glColor4f(1.0, 1.0, 1.0, 1.0)
+        elif self.selected:
+            glColor4f(1.0, 0.9, 0.2, 0.95)
+        else:
+            glColor4f(0.0, 1.0, 0.8, 0.8)
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
         glBegin(GL_QUADS)
-        glVertex3f(-s, -s,  s); glVertex3f( s, -s,  s); glVertex3f( s,  s,  s); glVertex3f(-s,  s,  s)
-        glVertex3f(-s, -s, -s); glVertex3f(-s,  s, -s); glVertex3f( s,  s, -s); glVertex3f( s, -s, -s)
-        glVertex3f(-s,  s, -s); glVertex3f(-s,  s,  s); glVertex3f( s,  s,  s); glVertex3f( s,  s, -s)
-        glVertex3f(-s, -s, -s); glVertex3f( s, -s, -s); glVertex3f( s, -s,  s); glVertex3f(-s, -s,  s)
-        glVertex3f( s, -s, -s); glVertex3f( s,  s, -s); glVertex3f( s,  s,  s); glVertex3f( s, -s,  s)
-        glVertex3f(-s, -s, -s); glVertex3f(-s, -s,  s); glVertex3f(-s,  s,  s); glVertex3f(-s,  s, -s)
+        glVertex3f(-half, -half,  half); glVertex3f( half, -half,  half); glVertex3f( half,  half,  half); glVertex3f(-half,  half,  half)
+        glVertex3f(-half, -half, -half); glVertex3f(-half,  half, -half); glVertex3f( half,  half, -half); glVertex3f( half, -half, -half)
         glEnd()
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
@@ -346,18 +368,19 @@ class ReactiveTargetObject:
 
 
 # ==============================================================================
-# 2D OpenGL Text Rendering Helper
+# Text & Font Rendering Module (Pygame to OpenGL Texture)
 # ==============================================================================
 class TextRenderer:
     """
-    Renders high-quality 2D text onto OpenGL surfaces via cached Pygame textures.
+    Renders high-crispness 2D UI text overlays via Pygame surface texture mapping.
     """
 
     def __init__(self):
         pygame.font.init()
-        self.font_main = pygame.font.SysFont("Consolas", 16, bold=True)
-        self.font_large = pygame.font.SysFont("Consolas", 22, bold=True)
-        self.font_title = pygame.font.SysFont("Consolas", 28, bold=True)
+        # Fallback font stack
+        self.font_main = pygame.font.SysFont("Consolas, Courier New, monospace", 14, bold=True)
+        self.font_large = pygame.font.SysFont("Consolas, Courier New, monospace", 18, bold=True)
+        self.font_title = pygame.font.SysFont("Consolas, Courier New, monospace", 22, bold=True)
         self._texture_cache = {}
 
     def get_texture(self, text, color, font):
@@ -365,8 +388,8 @@ class TextRenderer:
         if key in self._texture_cache:
             return self._texture_cache[key]
 
-        # Prevent unbounded cache growth
-        if len(self._texture_cache) > 200:
+        # Manage texture cache limit
+        if len(self._texture_cache) > 100:
             for old_key, (old_tex, _, _) in list(self._texture_cache.items())[:50]:
                 glDeleteTextures(1, [old_tex])
                 del self._texture_cache[old_key]
@@ -753,7 +776,265 @@ def draw_hud(text_renderer, telemetry, fps, calib_notice_time, anim_time, execut
 
 
 # ==============================================================================
-# Main Application Loop
+# Host Desktop Viewport Application Engine (Task 3.2 & 3.3 Architecture)
+# ==============================================================================
+class HostEngine:
+    """
+    Main desktop viewport application engine encapsulating Pygame/PyOpenGL render loop,
+    telemetry bridge, spatial interpolation, 3D trajectory recording, and action routing.
+    Adheres strictly to Tasks 3.2 and 3.3 of KineTrak Technical Architecture Spec v4.2.
+    """
+
+    def __init__(self, synthetic_mode=False, test_frames=0):
+        self.synthetic_mode = synthetic_mode
+        self.test_frames = test_frames
+
+        # Task 3.2 & 3.3: Trajectory recording history & rendering state
+        self.trajectory_history = deque(maxlen=60)
+        self.show_trajectory = True
+        self.curr_pos = [0.0, 0.0, 0.0]
+        self.curr_rot = [1.0, 0.0, 0.0, 0.0]
+
+        self.running = True
+        self.origin_offset = [0.0, 0.0, 0.0]
+        self.calib_notice_time = 0.0
+        self.execution_flash = 0.0
+        self.last_processed_action = "NULL"
+        self.frame_count = 0
+
+        # Sub-modules
+        self.text_renderer = TextRenderer()
+        self.telemetry_bridge = TelemetryBridge()
+        self.interpolator = SpatialInterpolator(init_pos=[0.0, 0.0, 0.0], init_rot=[1.0, 0.0, 0.0, 0.0], zoh_duration=0.3)
+        self.target_object = ReactiveTargetObject()
+
+        # Telemetry ingestion bridge
+        self.watcher = ClipboardWatcher(state_callback=self.telemetry_bridge.on_packet)
+        self.synthetic_gen = None
+
+    def trigger_action(self, action: str):
+        """
+        Task 3.3: Routes discrete actions (e.g., ACTION:SPAWN / EXPLODE, ACTION:RESET / RESET,
+        ACTION:SELECT, ACTION:DELETE) cleanly to the central reactive target object.
+        Clears trajectory history on RESET.
+        """
+        if not action or action == "NULL":
+            return
+        act = action.strip().upper()
+        if act.startswith("ACTION:"):
+            act = act[7:]
+
+        if act == "RESET":
+            self.trajectory_history.clear()
+
+        self.target_object.trigger_action(action)
+
+    def draw_trajectory_ribbon(self):
+        """
+        Task 3.3: Renders 3D trajectory ribbon using GL_LINE_STRIP with distance-based alpha fading
+        for the cyan/amber ribbon line strip (TDD v4.2 §3.3).
+        """
+        if not self.show_trajectory or len(self.trajectory_history) < 2:
+            return
+
+        glLineWidth(3.5)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBegin(GL_LINE_STRIP)
+
+        n_pts = len(self.trajectory_history)
+        for i, pt in enumerate(self.trajectory_history):
+            # Distance-based alpha fading (tail = semi-transparent 0.15, head = opaque 1.0)
+            t = i / max(1, n_pts - 1)
+            alpha = 0.15 + 0.85 * (t ** 1.5)
+
+            # Continuous Cyan (0.0, 0.9, 1.0) -> Amber (1.0, 0.75, 0.0) color gradient along ribbon
+            r = (1.0 - t) * 0.0 + t * 1.0
+            g = (1.0 - t) * 0.9 + t * 0.75
+            b = (1.0 - t) * 1.0 + t * 0.0
+            glColor4f(r, g, b, alpha)
+            glVertex3f(pt[0], pt[1], pt[2])
+
+        glEnd()
+
+    def run(self):
+        """
+        Runs the main Pygame/PyOpenGL 60FPS application loop.
+        """
+        # 1. Initialize Pygame & PyOpenGL Window
+        pygame.init()
+        pygame.display.set_caption(WINDOW_TITLE)
+
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
+        pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+        pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
+
+        screen = pygame.display.set_mode(
+            (WINDOW_WIDTH, WINDOW_HEIGHT),
+            pygame.DOUBLEBUF | pygame.OPENGL
+        )
+
+        glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluPerspective(45.0, WINDOW_WIDTH / WINDOW_HEIGHT, 0.1, 50.0)
+        glMatrixMode(GL_MODELVIEW)
+
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glClearColor(*COLOR_BG)
+
+        # 2. Start Background Telemetry Threads
+        self.watcher.start()
+
+        if self.synthetic_mode:
+            self.synthetic_gen = SyntheticGenerator(self.telemetry_bridge)
+            self.synthetic_gen.start()
+
+        clock = pygame.time.Clock()
+
+        print("[KineTrak] 3D Viewport initialized successfully.")
+
+        try:
+            while self.running:
+                dt = clock.tick(TARGET_FPS) / 1000.0  # seconds
+                fps = clock.get_fps()
+                anim_time = time.time()
+                self.frame_count += 1
+
+                if self.test_frames > 0 and self.frame_count >= self.test_frames:
+                    print(f"[KineTrak] Completed test run of {self.test_frames} frames. Exiting cleanly.")
+                    break
+
+                # ------------------------------------------------------------------
+                # Event Handling
+                # ------------------------------------------------------------------
+                for event in pygame.event.get():
+                    if event.type == QUIT:
+                        self.running = False
+                    elif event.type == KEYDOWN:
+                        if event.key == K_ESCAPE:
+                            self.running = False
+                        elif event.key == K_SPACE:
+                            # Recalibrate Origin
+                            self.origin_offset = list(self.interpolator.pos)
+                            self.calib_notice_time = 2.0
+                            print(f"[KineTrak] Origin Recalibrated: offset={self.origin_offset}")
+                        elif event.key == K_t:
+                            # Toggle synthetic test mode
+                            self.synthetic_mode = not self.synthetic_mode
+                            if self.synthetic_mode:
+                                if not self.synthetic_gen:
+                                    self.synthetic_gen = SyntheticGenerator(self.telemetry_bridge)
+                                self.synthetic_gen.start()
+                            else:
+                                if self.synthetic_gen:
+                                    self.synthetic_gen.stop()
+
+                # ------------------------------------------------------------------
+                # Telemetry Ingestion & Spatial Interpolation (60FPS Main Thread)
+                # ------------------------------------------------------------------
+                latest_packet, has_new, last_act, last_act_time = self.telemetry_bridge.snapshot()
+
+                if has_new:
+                    is_tracking = (latest_packet.get("state", 1) == 1) and not latest_packet.get("stale", False)
+                    self.interpolator.update_target(
+                        latest_packet.get("pos"),
+                        latest_packet.get("rot"),
+                        is_tracking=is_tracking
+                    )
+
+                smoothed_pos, smoothed_rot = self.interpolator.step(alpha=0.25)
+
+                calibrated_pos = [
+                    smoothed_pos[0] - self.origin_offset[0],
+                    smoothed_pos[1] - self.origin_offset[1],
+                    smoothed_pos[2] - self.origin_offset[2],
+                ]
+
+                self.curr_pos = calibrated_pos
+                self.curr_rot = smoothed_rot
+
+                # Task 3.2: Record trajectory history when state == 1 and gesture_state == "RECORDING"
+                is_tracking = (latest_packet.get("state", 1) == 1) and not latest_packet.get("stale", False)
+                gesture_state = latest_packet.get("gesture_state", "IDLE")
+                if is_tracking and gesture_state == "RECORDING":
+                    self.trajectory_history.append(self.curr_pos.copy())
+
+                # Task 3.3: Detect and route new Action Triggers
+                current_action = latest_packet.get("action", "NULL")
+                if current_action and current_action != "NULL" and current_action != self.last_processed_action:
+                    self.trigger_action(current_action)
+                    self.last_processed_action = current_action
+                    self.execution_flash = 1.0
+                elif current_action == "NULL":
+                    self.last_processed_action = "NULL"
+
+                # Decay flash / notice timers
+                if self.execution_flash > 0.0:
+                    self.execution_flash = max(0.0, self.execution_flash - 2.5 * dt)
+                if self.calib_notice_time > 0.0:
+                    self.calib_notice_time = max(0.0, self.calib_notice_time - dt)
+
+                self.target_object.update(dt)
+
+                # ------------------------------------------------------------------
+                # 3D Viewport Rendering
+                # ------------------------------------------------------------------
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                glMatrixMode(GL_MODELVIEW)
+                glLoadIdentity()
+
+                gluLookAt(
+                    0.0, 3.2, 6.2,  # Eye position
+                    0.0, 0.6, 0.0,  # Look-at target
+                    0.0, 1.0, 0.0   # Up vector
+                )
+
+                # Draw infinite 3D floor grid along X-Z plane
+                draw_infinite_floor_grid(extent=24.0, step=1.0)
+
+                # Draw central reactive target object (cube)
+                self.target_object.draw()
+
+                # Task 3.3: Draw 3D trajectory ribbon line strip
+                self.draw_trajectory_ribbon()
+
+                # Draw 3D spatial cursor reflecting smoothed 6-DOF phone pose
+                draw_phone_spatial_cursor(self.curr_pos, self.curr_rot)
+
+                # ------------------------------------------------------------------
+                # 2D HUD Rendering (Orthographic Mode)
+                # ------------------------------------------------------------------
+                display_telemetry = dict(latest_packet)
+                display_telemetry["pos"] = self.curr_pos
+                display_telemetry["rot"] = self.curr_rot
+
+                draw_hud(
+                    text_renderer=self.text_renderer,
+                    telemetry=display_telemetry,
+                    fps=fps,
+                    calib_notice_time=self.calib_notice_time,
+                    anim_time=anim_time,
+                    execution_flash=self.execution_flash,
+                    synthetic_mode=self.synthetic_mode
+                )
+
+                pygame.display.flip()
+
+        finally:
+            print("[KineTrak] Shutting down cleanly...")
+            if self.synthetic_gen:
+                self.synthetic_gen.stop()
+            self.watcher.stop()
+            pygame.quit()
+            print("[KineTrak] Cleanup complete.")
+
+
+# ==============================================================================
+# Main Entry Point
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(description="KineTrak Desktop Client v4.2")
@@ -761,188 +1042,8 @@ def main():
     parser.add_argument("--test-frames", type=int, default=0, help="Run for N frames and exit (for automated testing)")
     args = parser.parse_args()
 
-    # 1. Initialize Pygame & PyOpenGL
-    pygame.init()
-    pygame.display.set_caption(WINDOW_TITLE)
-
-    # Request OpenGL attributes
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
-    pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-    pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
-
-    screen = pygame.display.set_mode(
-        (WINDOW_WIDTH, WINDOW_HEIGHT),
-        pygame.DOUBLEBUF | pygame.OPENGL
-    )
-
-    # Setup 3D Perspective Projection
-    glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
-    gluPerspective(45.0, WINDOW_WIDTH / WINDOW_HEIGHT, 0.1, 50.0)
-    glMatrixMode(GL_MODELVIEW)
-
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glClearColor(*COLOR_BG)
-
-    # 2. Setup Modules
-    text_renderer = TextRenderer()
-    telemetry_bridge = TelemetryBridge()
-    interpolator = SpatialInterpolator(init_pos=[0.0, 0.0, 0.0], init_rot=[1.0, 0.0, 0.0, 0.0], zoh_duration=0.3)
-    target_object = ReactiveTargetObject()
-
-    # 3. Start Telemetry Ingestion
-    watcher = ClipboardWatcher(state_callback=telemetry_bridge.on_packet)
-    watcher.start()
-
-    synthetic_gen = None
-    synthetic_active = False
-    if args.synthetic:
-        synthetic_gen = SyntheticGenerator(telemetry_bridge)
-        synthetic_gen.start()
-        synthetic_active = True
-
-    clock = pygame.time.Clock()
-    running = True
-
-    origin_offset = [0.0, 0.0, 0.0]
-    calib_notice_time = 0.0
-    execution_flash = 0.0
-    last_processed_action = "NULL"
-    frame_count = 0
-
-    print("[KineTrak] 3D Viewport initialized successfully.")
-
-    try:
-        while running:
-            dt = clock.tick(TARGET_FPS) / 1000.0  # seconds
-            fps = clock.get_fps()
-            anim_time = time.time()
-            frame_count += 1
-
-            # Check automated test frames exit
-            if args.test_frames > 0 and frame_count >= args.test_frames:
-                print(f"[KineTrak] Completed test run of {args.test_frames} frames. Exiting cleanly.")
-                break
-
-            # ------------------------------------------------------------------
-            # Event Handling
-            # ------------------------------------------------------------------
-            for event in pygame.event.get():
-                if event.type == QUIT:
-                    running = False
-                elif event.type == KEYDOWN:
-                    if event.key == K_ESCAPE:
-                        running = False
-                    elif event.key == K_SPACE:
-                        # Recalibrate Origin (Zero out current position translation offset)
-                        origin_offset = list(interpolator.pos)
-                        calib_notice_time = 2.0
-                        print(f"[KineTrak] Origin Recalibrated: offset={origin_offset}")
-                    elif event.key == K_t:
-                        # Toggle synthetic test mode
-                        synthetic_active = not synthetic_active
-                        if synthetic_active:
-                            if not synthetic_gen:
-                                synthetic_gen = SyntheticGenerator(telemetry_bridge)
-                            synthetic_gen.start()
-                        else:
-                            if synthetic_gen:
-                                synthetic_gen.stop()
-
-            # ------------------------------------------------------------------
-            # Telemetry Ingestion & Interpolation (60FPS Main Thread)
-            # ------------------------------------------------------------------
-            latest_packet, has_new, last_act, last_act_time = telemetry_bridge.snapshot()
-
-            if has_new:
-                is_tracking = (latest_packet.get("state", 1) == 1) and not latest_packet.get("stale", False)
-                interpolator.update_target(
-                    latest_packet.get("pos"),
-                    latest_packet.get("rot"),
-                    is_tracking=is_tracking
-                )
-
-            # Update interpolator smoothly towards target via 60FPS step
-            smoothed_pos, smoothed_rot = interpolator.step(alpha=0.25)
-
-            # Apply Origin Recalibration Offset
-            calibrated_pos = [
-                smoothed_pos[0] - origin_offset[0],
-                smoothed_pos[1] - origin_offset[1],
-                smoothed_pos[2] - origin_offset[2],
-            ]
-
-            # Detect and route new Action Triggers to reactive target object
-            current_action = latest_packet.get("action", "NULL")
-            if current_action and current_action != "NULL" and current_action != last_processed_action:
-                target_object.trigger_action(current_action)
-                last_processed_action = current_action
-                execution_flash = 1.0
-            elif current_action == "NULL":
-                last_processed_action = "NULL"
-
-            # Decay flash / notice timers
-            if execution_flash > 0.0:
-                execution_flash = max(0.0, execution_flash - 2.5 * dt)
-            if calib_notice_time > 0.0:
-                calib_notice_time = max(0.0, calib_notice_time - dt)
-
-            target_object.update(dt)
-
-            # ------------------------------------------------------------------
-            # 3D Viewport Rendering
-            # ------------------------------------------------------------------
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-            glMatrixMode(GL_MODELVIEW)
-            glLoadIdentity()
-
-            # Camera looking at the origin from an elevated perspective
-            gluLookAt(
-                0.0, 3.2, 6.2,  # Eye position
-                0.0, 0.6, 0.0,  # Look-at target
-                0.0, 1.0, 0.0   # Up vector
-            )
-
-            # Draw infinite 3D floor grid along X-Z plane
-            draw_infinite_floor_grid(extent=24.0, step=1.0)
-
-            # Draw central reactive target object (cube)
-            target_object.draw()
-
-            # Draw 3D spatial cursor reflecting smoothed 6-DOF phone pose
-            draw_phone_spatial_cursor(calibrated_pos, smoothed_rot)
-
-            # ------------------------------------------------------------------
-            # 2D HUD Rendering (Orthographic Mode)
-            # ------------------------------------------------------------------
-            display_telemetry = dict(latest_packet)
-            display_telemetry["pos"] = calibrated_pos
-            display_telemetry["rot"] = smoothed_rot
-
-            draw_hud(
-                text_renderer=text_renderer,
-                telemetry=display_telemetry,
-                fps=fps,
-                calib_notice_time=calib_notice_time,
-                anim_time=anim_time,
-                execution_flash=execution_flash,
-                synthetic_mode=synthetic_active
-            )
-
-            # Swap double buffer
-            pygame.display.flip()
-
-    finally:
-        print("[KineTrak] Shutting down cleanly...")
-        if synthetic_gen:
-            synthetic_gen.stop()
-        watcher.stop()
-        pygame.quit()
-        print("[KineTrak] Cleanup complete.")
+    engine = HostEngine(synthetic_mode=args.synthetic, test_frames=args.test_frames)
+    engine.run()
 
 
 if __name__ == "__main__":
