@@ -105,7 +105,8 @@ class MotionBufferManager(
             }
 
             BridgeState.pendingAction.set(resolvedAction)
-            // Transition back to IDLE — ClipboardBridgeService handles ACTION_DISPATCHED latch
+            // Latch pendingAction in BridgeState and revert gestureState back to "NULL"
+            BridgeState.gestureState = "NULL"
             BridgeState.currentState = BridgeState.STATE_IDLE
         }
     }

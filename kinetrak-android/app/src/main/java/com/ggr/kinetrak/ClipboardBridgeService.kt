@@ -88,12 +88,13 @@ class ClipboardBridgeService : Service() {
                 val seq = seqCounter.getAndIncrement()
                 BridgeState.currentSeq.set(seq)
 
-                // ── 7-tick action latch window (~500ms @ 15Hz) ────────────────────────
+                // ── Dynamic action latch window (~500ms duration) ────────────────────
                 // Consume the pending action atomically on the first tick it appears.
                 val newPendingAction = BridgeState.pendingAction.get()
                 if (newPendingAction != "NULL" && activeLatchedAction == "NULL") {
                     activeLatchedAction = newPendingAction
-                    latchTicksRemaining = 7
+                    val budgetMs = BridgeState.emissionDelayMs
+                    latchTicksRemaining = maxOf(1, (500L / budgetMs).toInt())
                     BridgeState.pendingAction.set("NULL")
                 }
 
@@ -143,9 +144,10 @@ class ClipboardBridgeService : Service() {
                     }
                 }
 
-                // ── Strict 15Hz timing: 66ms budget, minimum 10ms sleep ───────────────
+                // ── Dynamic timing based on emission mode (15Hz: 66ms, 20Hz: 50ms, 30Hz: 33ms) ───
+                val targetBudget = BridgeState.emissionDelayMs
                 val elapsed = System.currentTimeMillis() - loopStart
-                delay(maxOf(10L, 66L - elapsed))
+                delay(maxOf(5L, targetBudget - elapsed))
             }
         }
     }

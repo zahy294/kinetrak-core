@@ -31,6 +31,28 @@ object BridgeState {
     const val STATE_RECORDING = 2
     const val STATE_THINKING  = 3
 
+    // ── Emission Rate Benchmark Modes ─────────────────────────────────────────
+    const val EMISSION_MODE_15HZ = 1  // 66ms delay [Baseline]
+    const val EMISSION_MODE_20HZ = 2  // 50ms delay
+    const val EMISSION_MODE_30HZ = 3  // 33ms delay
+
+    @Volatile var emissionMode: Int = EMISSION_MODE_15HZ
+
+    val emissionDelayMs: Long
+        get() = when (emissionMode) {
+            EMISSION_MODE_20HZ -> 50L
+            EMISSION_MODE_30HZ -> 33L
+            else               -> 66L // Default 15Hz Baseline
+        }
+
+    fun setEmissionModeByRate(targetHz: Int) {
+        emissionMode = when (targetHz) {
+            30   -> EMISSION_MODE_30HZ
+            20   -> EMISSION_MODE_20HZ
+            else -> EMISSION_MODE_15HZ
+        }
+    }
+
     // ── Integer state tracking (Dev 2) ─────────────────────────────────────────
     @Volatile var currentState: Int = STATE_IDLE
 
@@ -40,13 +62,14 @@ object BridgeState {
         get() = when (currentState) {
             STATE_RECORDING -> "RECORDING"
             STATE_THINKING  -> "THINKING"
-            else            -> "IDLE"
+            else            -> "NULL"
         }
         set(value) {
             currentState = when (value) {
                 "RECORDING"         -> STATE_RECORDING
                 "THINKING"          -> STATE_THINKING
                 "ACTION_DISPATCHED" -> STATE_IDLE      // latch handled by ClipboardBridgeService
+                "NULL"              -> STATE_IDLE
                 else                -> STATE_IDLE
             }
         }
@@ -92,6 +115,12 @@ object BridgeState {
     // SensorFusionHub assigns:  BridgeState.currentPosition = Vec3(...)
     // These computed properties write through to the FloatArray so every
     // consumer (ClipboardBridgeService, MainActivity HUD) sees the same data.
+    fun setPosition(x: Float, y: Float, z: Float) {
+        currentPosition[0] = x
+        currentPosition[1] = y
+        currentPosition[2] = z
+    }
+
     fun setPositionFromVec3(v: Vec3) {
         currentPosition[0] = v.x
         currentPosition[1] = v.y

@@ -96,7 +96,9 @@ class MotionBufferManager(
             }
 
             BridgeState.pendingAction.set(resolvedAction)
-            BridgeState.gestureState = "ACTION_DISPATCHED"
+            // Latch pendingAction in BridgeState and revert gestureState back to "NULL"
+            BridgeState.gestureState = "NULL"
+            BridgeState.currentState = BridgeState.STATE_IDLE
         }
     }
 

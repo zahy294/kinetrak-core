@@ -9,8 +9,8 @@ import kotlin.math.max
  * Tuned specifically for maximum tracking stability and trajectory fidelity over raw zero-latency.
  */
 class OneEuroFilter(
-    var minCutoff: Float = 0.5f,
-    var beta: Float = 0.002f,
+    var minCutoff: Float = 1.2f,
+    var beta: Float = 0.08f,
     var dCutoff: Float = 0.5f
 ) {
     private var prevX: Float? = null
@@ -54,8 +54,8 @@ class OneEuroFilter(
  * 3D container managing three OneEuroFilter instances for X, Y, and Z translational axes.
  */
 class OneEuroFilter3D(
-    minCutoff: Float = 0.5f,
-    beta: Float = 0.002f,
+    minCutoff: Float = 1.2f,
+    beta: Float = 0.08f,
     dCutoff: Float = 0.5f
 ) {
     private val filterX = OneEuroFilter(minCutoff, beta, dCutoff)
